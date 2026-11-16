@@ -1,0 +1,111 @@
+#!/bin/bash
+#
+# Builds `continuous` and wraps it in Continuous.app.
+#
+# The bundle is not decoration. macOS attributes Accessibility and Input Monitoring grants to
+# the *bundle*, so running the bare binary from a terminal would attach those permissions to
+# Terminal or iTerm instead — which is both wrong and a much bigger grant than you meant to make.
+#
+# Usage:
+#   Scripts/build.sh            release build + app bundle
+#   Scripts/build.sh --debug    debug build + app bundle
+#   Scripts/build.sh --install  also symlink `continuous` into /usr/local/bin
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+ROOT="$PWD"
+
+CONFIG="release"
+INSTALL=0
+for arg in "$@"; do
+  case "$arg" in
+    --debug)   CONFIG="debug" ;;
+    --release) CONFIG="release" ;;
+    --install) INSTALL=1 ;;
+    *) echo "unknown option: $arg" >&2; exit 1 ;;
+  esac
+done
+
+BUNDLE_ID="app.continuous.cli"
+APP="$ROOT/build/Continuous.app"
+
+echo "==> Building ($CONFIG)"
+swift build -c "$CONFIG"
+BIN="$(swift build -c "$CONFIG" --show-bin-path)/continuous"
+test -x "$BIN" || { echo "build produced no binary at $BIN" >&2; exit 1; }
+
+VERSION="$("$BIN" --version | awk '{print $2}')"
+
+echo "==> Assembling $APP"
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp "$BIN" "$APP/Contents/MacOS/continuous"
+
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>                   <string>Continuous</string>
+    <key>CFBundleDisplayName</key>            <string>Continuous</string>
+    <key>CFBundleIdentifier</key>             <string>$BUNDLE_ID</string>
+    <key>CFBundleExecutable</key>             <string>continuous</string>
+    <key>CFBundlePackageType</key>            <string>APPL</string>
+    <key>CFBundleShortVersionString</key>     <string>$VERSION</string>
+    <key>CFBundleVersion</key>                <string>$VERSION</string>
+    <key>LSMinimumSystemVersion</key>         <string>13.0</string>
+    <!-- No Dock icon, no menu bar: this is a background tool driven from the CLI. -->
+    <key>LSUIElement</key>                    <true/>
+    <key>NSHumanReadableCopyright</key>       <string>Local-only keyboard and mouse sharing. No network destination other than your own paired Mac.</string>
+    <key>NSInputMonitoringUsageDescription</key>
+        <string>Continuous reads keyboard and pointer events so it can forward them to your other Mac.</string>
+    <!-- macOS 15 and later gate both Bonjour discovery and outbound connections to LAN
+         addresses behind the Local Network permission. Without this key the connection to
+         your other Mac fails with no visible error. -->
+    <key>NSLocalNetworkUsageDescription</key>
+        <string>Continuous connects directly to your other Mac on your local network. It never contacts any other server.</string>
+    <key>NSBonjourServices</key>
+        <array>
+            <string>_continuous._tcp</string>
+        </array>
+</dict>
+</plist>
+PLIST
+
+# Ad-hoc signature. It gives the bundle a stable code identity on this machine, which is what
+# the privacy database keys its grants on. Re-signing after a rebuild changes that identity, so
+# a rebuild may require re-ticking the boxes in System Settings — unavoidable without a paid
+# Developer ID certificate, and a fair trade for not having to trust anyone else's binary.
+echo "==> Signing (ad-hoc)"
+codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
+codesign --verify --verbose=1 "$APP" 2>&1 | sed 's/^/    /'
+
+# A tiny launcher so `continuous` on your PATH runs the *bundled* copy, keeping one code
+# identity and therefore one set of permission grants.
+mkdir -p "$ROOT/build"
+cat > "$ROOT/build/continuous" <<LAUNCHER
+#!/bin/bash
+exec "$APP/Contents/MacOS/continuous" "\$@"
+LAUNCHER
+chmod +x "$ROOT/build/continuous"
+
+echo "==> Built $APP"
+echo "    binary  $(du -h "$APP/Contents/MacOS/continuous" | cut -f1)"
+echo "    launcher $ROOT/build/continuous"
+
+if [ "$INSTALL" = "1" ]; then
+  DEST="/usr/local/bin/continuous"
+  echo "==> Installing launcher to $DEST"
+  if [ -w "$(dirname "$DEST")" ]; then
+    ln -sf "$ROOT/build/continuous" "$DEST"
+  else
+    sudo ln -sf "$ROOT/build/continuous" "$DEST"
+  fi
+  echo "    $DEST -> $ROOT/build/continuous"
+fi
+
+echo
+echo "Next:"
+echo "    $ROOT/build/continuous selftest"
+echo "    $ROOT/build/continuous doctor"
