@@ -33,7 +33,7 @@ struct Args {
     /// Flags that take no value, so `--no-bonjour listen` is not misread.
     static let booleanFlags: Set<String> = [
         "help", "version", "no-bonjour", "allow-public", "rebind",
-        "json", "quiet", "prompt", "no-prompt", "force", "once", "keys", "no-pointer",
+        "json", "quiet", "prompt", "no-prompt", "force", "once", "keys", "link-only",
     ]
 
     init(_ argv: [String]) {

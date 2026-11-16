@@ -129,6 +129,21 @@ extension Commands {
         let heartbeat = Heartbeat(link: link)
         let state = Box<(done: Bool, failure: Error?)>((false, nil))
 
+        // `--link-only` keeps the milestone-1/2 behaviour: hold the link open and report
+        // latency, without touching this Mac's keyboard or pointer. Useful for diagnosing a
+        // network problem without also wondering whether the event tap is at fault.
+        let shareInput = !args.bool("link-only")
+        let sharing = shareInput ? SharingSession(config: config,
+                                                  remoteName: target.pairing.peerName
+                                                      ?? target.pairing.label) : nil
+
+        sharing?.onModeChange = { mode in
+            switch mode {
+            case .remote: out("  \(Style.cyan("→"))  pointer is on \(Style.bold(target.pairing.peerName ?? target.pairing.label))")
+            case .local:  out("  \(Style.green("←"))  pointer is back on this Mac")
+            }
+        }
+
         link.onReady = { peer in
             directory.note(peer: peer)
             ok("link up  →  \(Style.bold(peer.name))  [\(peer.deviceID.short)]  \(peer.endpoint)")
@@ -138,6 +153,7 @@ extension Commands {
             // directions, and it makes the handshake symmetric now.
             link.send(.screenInfo(displays: Displays.current()))
             heartbeat.start()
+            sharing?.attach(link: link, layout: nil)
         }
 
         var printedSamples = 0
@@ -151,30 +167,102 @@ extension Commands {
 
         link.onMessage = { message in
             heartbeat.handle(message)
+            sharing?.noteTraffic()
             if case let .screenInfo(displays) = message {
                 directory.noteDisplays(displays, forKeyID: link.peer?.keyID ?? Data())
-                reportLayout(remoteDisplays: displays,
-                             remoteName: link.peer?.name ?? target.pairing.label,
-                             config: config)
+                let name = link.peer?.name ?? target.pairing.label
+                reportLayout(remoteDisplays: displays, remoteName: name, config: config)
+                if let layout = ScreenLayout(localDisplays: Displays.current(),
+                                             remoteDisplays: displays,
+                                             edge: config.edge, alignment: config.alignment) {
+                    sharing?.update(layout: layout)
+                    sharing?.attach(link: link, layout: layout)
+                }
             }
         }
 
-        link.onClose = { error in state.value = (true, error) }
+        link.onClose = { error in
+            sharing?.detach(reason: "the link closed")
+            state.value = (true, error)
+        }
         link.start()
         Runtime.installSignalHandlers()
+
+        // The tap is installed only once we know the link is up, so a failure to connect
+        // never leaves this Mac with its input being swallowed.
+        if let sharing {
+            guard Runtime.wait(until: { link.peer != nil || state.value.done }, timeout: 15),
+                  let peer = link.peer else {
+                if let err = state.value.failure { bad(err.localizedDescription) }
+                else { bad("could not establish the link") }
+                throw ExitSilently(code: 1)
+            }
+
+            // Both ends on one Mac would feed the injected events straight back into the
+            // tap that produced them, and each lap round that loop generates another event.
+            // Harmless as a transport test, which is why --link-only still allows it.
+            let sameDevice = peer.deviceID == identity.deviceID
+            let overLoopback = NetworkAddress.isLoopback(target.endpoint)
+            if sameDevice || overLoopback {
+                bad(sameDevice ? "this link loops back to this same Mac"
+                               : "this link runs over loopback, so both ends are this Mac")
+                out()
+                out("  Input sharing is refused here: the events this Mac injects would be")
+                out("  picked up by its own event tap and sent round again.")
+                out(Style.dim("    For a loopback transport test, use:  continuous connect --link-only"))
+                link.close(reason: "refusing to share input with myself")
+                throw ExitSilently(code: 1)
+            }
+            // Mouse events reach a tap with Accessibility alone; keyboard events need Input
+            // Monitoring as well. Without that check the session starts, the pointer crosses
+            // over, and only then does it become apparent that typing does nothing.
+            if !Permissions.inputMonitoring().isGranted {
+                bad("Input Monitoring is not granted — the pointer would cross over but the keyboard would not follow")
+                explainCapturePermissions()
+                link.close(reason: "missing Input Monitoring")
+                throw ExitSilently(code: 1)
+            }
+            do {
+                try sharing.start()
+                out()
+                ok("sharing this Mac's keyboard and mouse")
+                let edgeWord: String
+                switch config.edge {
+                case .right: edgeWord = "right edge"
+                case .left: edgeWord = "left edge"
+                case .top: edgeWord = "top edge"
+                case .bottom: edgeWord = "bottom edge"
+                }
+                info("push the pointer off the \(edgeWord) of this Mac to cross over")
+                info("hold \(Style.bold("⌘ ⌥ ⌃ ⇧")) together at any time to bring it straight back")
+                out()
+            } catch {
+                bad(error.localizedDescription)
+                explainCapturePermissions()
+                link.close(reason: "could not capture input")
+                throw ExitSilently(code: 1)
+            }
+        }
 
         let duration = try args.double("duration")
         let deadline = duration.map { Date().addingTimeInterval($0) }
         Runtime.runUntilInterrupted {
+            sharing?.checkLiveness()
             if state.value.done { Runtime.interrupted = true }
             if let deadline, Date() >= deadline { Runtime.interrupted = true }
         }
 
+        // Always give this Mac its pointer back, whatever ended the session.
+        sharing?.stop()
         heartbeat.stop()
         let stats = heartbeat.snapshot
         if stats.samples > 0 {
             out()
             ok("latency over \(stats.samples) samples: \(stats.summary)")
+        }
+
+        if let forwarded = sharing?.forwardedCount, forwarded > 0 {
+            info("forwarded \(forwarded) pointer events")
         }
 
         if let err = state.value.failure {
@@ -310,6 +398,27 @@ final class ReceivingSession {
 
 struct ExitSilently: Error {
     let code: Int32
+}
+
+/// Capturing input needs *both* privacy permissions, and macOS reports neither of them
+/// through the API that fails — `CGEvent.tapCreate` just returns nil.
+func explainCapturePermissions() {
+    out()
+    out("  Sharing this Mac's keyboard and mouse needs two permissions, both of them:")
+    out("    System Settings ▸ Privacy & Security ▸ \(Style.bold("Input Monitoring"))   \(Permissions.inputMonitoring().isGranted ? Style.green("granted") : Style.red("missing"))")
+    out("    System Settings ▸ Privacy & Security ▸ \(Style.bold("Accessibility"))      \(Permissions.accessibility().isGranted ? Style.green("granted") : Style.red("missing"))")
+    out()
+    if Permissions.isRunningInsideAppBundle {
+        out(Style.dim("    Grant them to: \(Bundle.main.bundlePath)"))
+    } else {
+        out("  You are running the bare binary, so these attach to whatever launched it —")
+        out("  your terminal or editor, which is a far broader grant than you need.")
+        out(Style.dim("    Build the bundle:  Scripts/build.sh"))
+        out(Style.dim("    Then run:          build/continuous connect"))
+    }
+    out()
+    out(Style.dim("    After changing either one, quit and start this command again —"))
+    out(Style.dim("    macOS only re-reads them when the process starts."))
 }
 
 /// macOS will not tell an app why it was refused, and the checkbox is several clicks deep,

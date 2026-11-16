@@ -76,16 +76,28 @@ enum Target {
             return (try LinkConnector.parseEndpoint(argument, defaultPort: config.port), "hostname")
         }
 
-        // No address given: find the Mac this pairing is pinned to.
+        // No address given: find the Mac this pairing is pinned to. Three ways, in order of
+        // how much they can tell us apart from how reliable they are.
         if let deviceID = pairing.peerDeviceID {
-            info("looking for \(pairing.peerName ?? pairing.label) [\(deviceID.short)] over Bonjour…")
-            if let hit = Discovery.first(matching: { $0.deviceID == deviceID }, timeout: 4) {
+            info("looking for \(pairing.peerName ?? pairing.label) [\(deviceID.short)]…")
+            if let hit = Discovery.first(matching: { $0.deviceID == deviceID }, timeout: 3) {
                 return (hit.endpoint, "Bonjour, matched on device id")
             }
+            Log.debug("Bonjour browsing found nothing — it is blocked on many managed networks")
+        }
+
+        // mDNS *name* resolution usually survives where browsing does not, because it is an
+        // ordinary hostname lookup rather than a service enumeration.
+        if let host = pairing.peerHostName ?? pairing.peerName.map(Identity.mdnsName(from:)),
+           !host.isEmpty {
+            let candidate = host.hasSuffix(".local") ? host : host + ".local"
+            info("trying \(candidate)")
+            return (try LinkConnector.parseEndpoint(candidate, defaultPort: config.port),
+                    "hostname \(candidate)")
         }
 
         if let remembered = pairing.lastEndpoint {
-            warn("not found over Bonjour — trying the address it was last seen on")
+            warn("no name to go on — trying the address it was last seen on")
             return (try LinkConnector.parseEndpoint(remembered, defaultPort: config.port),
                     "last known address")
         }

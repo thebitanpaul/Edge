@@ -2,7 +2,7 @@ import Foundation
 
 public enum Wire {
     /// Bumped whenever the frame layout changes incompatibly.
-    public static let protocolVersion: UInt16 = 1
+    public static let protocolVersion: UInt16 = 2
     /// Frames larger than this are a bug or an attack; the link is dropped.
     public static let maxFrameSize: Int = 64 * 1024
     public static let nonceLength = 32
@@ -64,9 +64,10 @@ public enum MouseButtonID: UInt8, Sendable {
 
 public enum Message: Sendable {
     case hello(protocolVersion: UInt16, deviceID: DeviceID, deviceName: String,
-               role: Role, capabilities: Capabilities, nonce: Data, keyID: Data)
+               hostName: String, role: Role, capabilities: Capabilities,
+               nonce: Data, keyID: Data)
     case helloAck(protocolVersion: UInt16, deviceID: DeviceID, deviceName: String,
-                  capabilities: Capabilities, nonce: Data, proof: Data)
+                  hostName: String, capabilities: Capabilities, nonce: Data, proof: Data)
     case authProof(proof: Data)
     case ready
     case ping(seq: UInt32, sentAt: UInt64)
@@ -130,13 +131,13 @@ public enum Codec {
     public static func encodePayload(_ message: Message) -> Data {
         var w = BinaryWriter()
         switch message {
-        case let .hello(v, id, name, role, caps, nonce, keyID):
+        case let .hello(v, id, name, host, role, caps, nonce, keyID):
             w.u16(v); w.blob(id.bytes); w.u8(role.rawValue); w.u32(caps.rawValue)
-            w.blob(nonce); w.blob(keyID); w.string(name)
+            w.blob(nonce); w.blob(keyID); w.string(name); w.string(host)
 
-        case let .helloAck(v, id, name, caps, nonce, proof):
+        case let .helloAck(v, id, name, host, caps, nonce, proof):
             w.u16(v); w.blob(id.bytes); w.u32(caps.rawValue)
-            w.blob(nonce); w.blob(proof); w.string(name)
+            w.blob(nonce); w.blob(proof); w.string(name); w.string(host)
 
         case let .authProof(proof):
             w.blob(proof)
@@ -200,7 +201,8 @@ public enum Codec {
                 let nonce = try r.blob(Wire.nonceLength)
                 let keyID = try r.blob(Wire.keyIDLength)
                 let name = try r.string()
-                return .hello(protocolVersion: v, deviceID: id, deviceName: name,
+                let host = try r.string()
+                return .hello(protocolVersion: v, deviceID: id, deviceName: name, hostName: host,
                               role: role, capabilities: caps, nonce: nonce, keyID: keyID)
 
             case .helloAck:
@@ -212,7 +214,8 @@ public enum Codec {
                 let nonce = try r.blob(Wire.nonceLength)
                 let proof = try r.blob(Wire.proofLength)
                 let name = try r.string()
-                return .helloAck(protocolVersion: v, deviceID: id, deviceName: name,
+                let host = try r.string()
+                return .helloAck(protocolVersion: v, deviceID: id, deviceName: name, hostName: host,
                                  capabilities: caps, nonce: nonce, proof: proof)
 
             case .authProof:

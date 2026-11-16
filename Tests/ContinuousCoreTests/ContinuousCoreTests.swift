@@ -156,9 +156,11 @@ struct CryptoTests {
 struct CodecTests {
     static let samples: [Message] = [
         .hello(protocolVersion: Wire.protocolVersion, deviceID: DeviceID(), deviceName: "Måc ünicode 🖱",
-               role: .host, capabilities: .baseline, nonce: Crypto.randomBytes(32), keyID: Crypto.randomBytes(8)),
+               hostName: "mac-unicode", role: .host, capabilities: .baseline,
+               nonce: Crypto.randomBytes(32), keyID: Crypto.randomBytes(8)),
         .helloAck(protocolVersion: Wire.protocolVersion, deviceID: DeviceID(), deviceName: "",
-                  capabilities: [.pointer], nonce: Crypto.randomBytes(32), proof: Crypto.randomBytes(32)),
+                  hostName: "", capabilities: [.pointer], nonce: Crypto.randomBytes(32),
+                  proof: Crypto.randomBytes(32)),
         .authProof(proof: Crypto.randomBytes(32)),
         .ready,
         .ping(seq: .max, sentAt: .max),
@@ -197,15 +199,17 @@ struct CodecTests {
         let nonce = Crypto.randomBytes(32)
         let keyID = Crypto.randomBytes(8)
         let frame = Codec.encodeFrame(.hello(protocolVersion: 1, deviceID: id, deviceName: "Work Mac",
-                                             role: .client, capabilities: [.pointer, .clipboard],
+                                             hostName: "work-mac", role: .client,
+                                             capabilities: [.pointer, .clipboard],
                                              nonce: nonce, keyID: keyID))
-        guard case let .hello(v, gotID, name, role, caps, gotNonce, gotKeyID) =
+        guard case let .hello(v, gotID, name, host, role, caps, gotNonce, gotKeyID) =
                 try Codec.decode(type: frame[4], payload: frame.dropFirst(5)) else {
             Issue.record("decoded the wrong case"); return
         }
         #expect(v == 1)
         #expect(gotID == id)
         #expect(name == "Work Mac")
+        #expect(host == "work-mac")
         #expect(role == .client)
         #expect(caps.rawValue == Capabilities([.pointer, .clipboard]).rawValue)
         #expect(gotNonce == nonce)
@@ -301,6 +305,28 @@ struct DeviceIDTests {
     }
 }
 
+@Suite("mDNS names")
+struct MDNSNameTests {
+    /// The rule macOS actually uses, which matters because this is the fallback for finding
+    /// the other Mac when Bonjour browsing is blocked.
+    @Test("derives the name macOS would use")
+    func derivation() {
+        #expect(Identity.mdnsName(from: "Bitan's MacBook Air") == "Bitans-MacBook-Air")
+        #expect(Identity.mdnsName(from: "Bitan\u{2019}s MacBook Air") == "Bitans-MacBook-Air")
+        #expect(Identity.mdnsName(from: "NAV-LT-0416") == "NAV-LT-0416")
+        #expect(Identity.mdnsName(from: "My  Mac!!") == "My-Mac")
+        #expect(Identity.mdnsName(from: "  spaced  out  ") == "spaced-out")
+        #expect(Identity.mdnsName(from: "MacBook") == "MacBook")
+    }
+
+    @Test("this Mac reports a usable hostname")
+    func localHostName() {
+        let name = Identity.localHostName
+        #expect(!name.isEmpty)
+        #expect(!name.contains(" "), "an mDNS label cannot contain spaces: '\(name)'")
+    }
+}
+
 @Suite("Pairing directory")
 struct PairingDirectoryTests {
     private func makeDirectory(_ labels: [String]) -> (PairingDirectory, [Pairing]) {
@@ -325,7 +351,7 @@ struct PairingDirectoryTests {
         let first = DeviceID(), second = DeviceID()
 
         #expect(dir.authorize(deviceID: first, keyID: pairings[0].keyID))
-        dir.note(peer: PeerInfo(deviceID: first, name: "Work Mac", role: .host,
+        dir.note(peer: PeerInfo(deviceID: first, name: "Work Mac", hostName: "work-mac", role: .host,
                                 capabilities: .baseline, endpoint: "10.0.0.2:52777",
                                 tlsDescription: "test", keyID: pairings[0].keyID))
 
@@ -347,7 +373,7 @@ struct PairingDirectoryTests {
     @Test("records the peer name and endpoint on connect")
     func records() {
         let (dir, pairings) = makeDirectory(["work"])
-        dir.note(peer: PeerInfo(deviceID: DeviceID(), name: "Personal", role: .client,
+        dir.note(peer: PeerInfo(deviceID: DeviceID(), name: "Personal", hostName: "personal", role: .client,
                                 capabilities: .baseline, endpoint: "192.168.1.9:52777",
                                 tlsDescription: "test", keyID: pairings[0].keyID))
         let stored = dir.snapshot.pairings[0]
@@ -361,8 +387,9 @@ struct PairingDirectoryTests {
     func inMemoryIsolation() throws {
         let before = try? Data(contentsOf: Paths.secretsFile)
         let (dir, pairings) = makeDirectory(["scratch"])
-        dir.note(peer: PeerInfo(deviceID: DeviceID(), name: "x", role: .host, capabilities: .baseline,
-                                endpoint: "", tlsDescription: "", keyID: pairings[0].keyID))
+        dir.note(peer: PeerInfo(deviceID: DeviceID(), name: "x", hostName: "x", role: .host,
+                                capabilities: .baseline, endpoint: "", tlsDescription: "",
+                                keyID: pairings[0].keyID))
         let after = try? Data(contentsOf: Paths.secretsFile)
         #expect(before == after)
     }
@@ -480,6 +507,18 @@ struct PrivateAddressTests {
         #expect(NetworkAddress.isAcceptablePeer(endpoint("127.0.0.1")))
         #expect(NetworkAddress.isAcceptablePeer(endpoint("::1")))
         #expect(NetworkAddress.isAcceptablePeer(endpoint("fe80::1")))
+    }
+
+    /// Guards the refusal to share input with ourselves: injected events would re-enter the
+    /// tap that produced them.
+    @Test("loopback is recognised whatever else an address looks like")
+    func loopbackDetection() {
+        #expect(NetworkAddress.isLoopback(endpoint("127.0.0.1")))
+        #expect(NetworkAddress.isLoopback(endpoint("127.1.2.3")))
+        #expect(NetworkAddress.isLoopback(endpoint("::1")))
+        #expect(!NetworkAddress.isLoopback(endpoint("192.168.1.5")))
+        #expect(!NetworkAddress.isLoopback(endpoint("fe80::1")))
+        #expect(!NetworkAddress.isLoopback(nil))
     }
 
     @Test("IPv6 endpoints are rendered unambiguously")

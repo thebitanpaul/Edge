@@ -55,8 +55,8 @@ extension Commands {
         out(Style.bold("Wire protocol"))
         let samples: [Message] = [
             .hello(protocolVersion: Wire.protocolVersion, deviceID: DeviceID(), deviceName: "Test Mac",
-                   role: .host, capabilities: .baseline, nonce: Crypto.randomBytes(32),
-                   keyID: Crypto.randomBytes(8)),
+                   hostName: "test-mac", role: .host, capabilities: .baseline,
+                   nonce: Crypto.randomBytes(32), keyID: Crypto.randomBytes(8)),
             .ping(seq: 42, sentAt: 1_234_567_890),
             .mouseMove(x: -1920, y: 1080, dx: -3, dy: 7),
             .mouseButton(button: .right, down: true, clickCount: 2, x: 10, y: 20),

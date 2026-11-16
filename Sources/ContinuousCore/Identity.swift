@@ -1,4 +1,5 @@
 import Foundation
+import SystemConfiguration
 
 public enum Role: UInt8, Codable, Sendable, CustomStringConvertible {
     case host = 1       // owns the physical keyboard and mouse
@@ -70,6 +71,38 @@ public struct Identity: Codable, Sendable {
     public var deviceID: DeviceID
     public var deviceName: String
     public var createdAt: Date
+
+    /// The name this Mac answers to over mDNS, e.g. `Bitans-MacBook-Air` for `…local`.
+    ///
+    /// Read fresh each time rather than stored: it follows the Sharing settings, and a stale
+    /// copy would send the other Mac looking for a name that no longer resolves.
+    public static var localHostName: String {
+        if let name = SCDynamicStoreCopyLocalHostName(nil) as String?, !name.isEmpty {
+            return name
+        }
+        return Identity.mdnsName(from: Host.current().localizedName
+                                 ?? ProcessInfo.processInfo.hostName)
+    }
+
+    /// How macOS turns a computer name into the name it answers to over mDNS.
+    ///
+    /// Spaces become hyphens, existing hyphens survive, and everything else is dropped —
+    /// which is why "Bitan's MacBook Air" becomes "Bitans-MacBook-Air" and not
+    /// "Bitan-s-MacBook-Air". Only a fallback: the real name is read from the system when
+    /// available and sent across the link during the handshake.
+    public static func mdnsName(from computerName: String) -> String {
+        var out = ""
+        for scalar in computerName.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) || scalar == "-" {
+                out.unicodeScalars.append(scalar)
+            } else if CharacterSet.whitespaces.contains(scalar) {
+                out.append("-")
+            }
+            // Anything else — apostrophes, punctuation, emoji — is dropped.
+        }
+        // Collapse runs of hyphens and trim them from the ends.
+        return out.split(separator: "-").joined(separator: "-")
+    }
 
     public init(deviceID: DeviceID, deviceName: String, createdAt: Date = Date()) {
         self.deviceID = deviceID

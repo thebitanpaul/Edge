@@ -4,6 +4,8 @@ import Network
 public struct PeerInfo: Sendable {
     public var deviceID: DeviceID
     public var name: String
+    /// The peer's mDNS hostname, so we can find it again without Bonjour browsing.
+    public var hostName: String = ""
     public var role: Role
     public var capabilities: Capabilities
     public var endpoint: String
@@ -57,7 +59,7 @@ public final class SecureLink {
     private var remoteNonce = Data()
     private var sessionAuthKey = Data()
     private var negotiatedKeyID = Data()
-    private var pendingPeer: (id: DeviceID, name: String, role: Role, caps: Capabilities)?
+    private var pendingPeer: (id: DeviceID, name: String, host: String, role: Role, caps: Capabilities)?
     private var timeoutWork: DispatchWorkItem?
     private var didFinish = false
 
@@ -238,6 +240,7 @@ public final class SecureLink {
             transmit(.hello(protocolVersion: Wire.protocolVersion,
                             deviceID: identity.deviceID,
                             deviceName: identity.deviceName,
+                            hostName: Identity.localHostName,
                             role: localRole,
                             capabilities: capabilities,
                             nonce: localNonce,
@@ -250,7 +253,7 @@ public final class SecureLink {
     private func handle(_ message: Message) {
         switch (phase, message) {
 
-        case let (.awaitingHello, .hello(version, peerID, peerName, peerRole, peerCaps, peerNonce, keyID)):
+        case let (.awaitingHello, .hello(version, peerID, peerName, peerHost, peerRole, peerCaps, peerNonce, keyID)):
             guard version == Wire.protocolVersion else {
                 reject(code: 1, "protocol version mismatch: peer speaks v\(version), this build speaks v\(Wire.protocolVersion)")
                 return
@@ -265,7 +268,7 @@ public final class SecureLink {
             negotiatedKeyID = keyID
             remoteNonce = peerNonce
             localNonce = Crypto.randomBytes(Wire.nonceLength)
-            pendingPeer = (peerID, peerName, peerRole, peerCaps)
+            pendingPeer = (peerID, peerName, peerHost, peerRole, peerCaps)
 
             let proof = Crypto.proof(authKey: sessionAuthKey, direction: "continuous/v1/responder",
                                      clientNonce: remoteNonce, serverNonce: localNonce,
@@ -274,11 +277,12 @@ public final class SecureLink {
             transmit(.helloAck(protocolVersion: Wire.protocolVersion,
                                deviceID: identity.deviceID,
                                deviceName: identity.deviceName,
+                               hostName: Identity.localHostName,
                                capabilities: capabilities,
                                nonce: localNonce,
                                proof: proof))
 
-        case let (.awaitingHelloAck, .helloAck(version, peerID, peerName, peerCaps, peerNonce, proof)):
+        case let (.awaitingHelloAck, .helloAck(version, peerID, peerName, peerHost, peerCaps, peerNonce, proof)):
             guard version == Wire.protocolVersion else {
                 reject(code: 1, "protocol version mismatch: peer speaks v\(version), this build speaks v\(Wire.protocolVersion)")
                 return
@@ -291,7 +295,7 @@ public final class SecureLink {
                 reject(code: 3, "peer failed the challenge — it does not hold the paired key")
                 return
             }
-            pendingPeer = (peerID, peerName, .client, peerCaps)
+            pendingPeer = (peerID, peerName, peerHost, .client, peerCaps)
             let mine = Crypto.proof(authKey: sessionAuthKey, direction: "continuous/v1/initiator",
                                     clientNonce: localNonce, serverNonce: remoteNonce,
                                     proverDeviceID: identity.deviceID)
@@ -346,6 +350,7 @@ public final class SecureLink {
         phase = .ready
         let info = PeerInfo(deviceID: pending.id,
                             name: pending.name,
+                            hostName: pending.host,
                             role: pending.role,
                             capabilities: pending.caps,
                             endpoint: NetworkAddress.describe(connection.currentPath?.remoteEndpoint ?? connection.endpoint),

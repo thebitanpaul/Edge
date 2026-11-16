@@ -197,6 +197,87 @@ extension Commands {
         ok("injection works on this Mac")
     }
 
+    // MARK: - capture-test
+
+    /// Checks that this Mac can *capture* input, without connecting to anything.
+    ///
+    /// Deliberately never crosses over: with no link and no layout there is nothing to cross
+    /// to, which is also the invariant being checked — that a tap with nowhere to send events
+    /// passes every one of them straight through.
+    static func captureTest(_ args: Args) throws {
+        let accessibility = Permissions.accessibility(prompt: true)
+        let monitoring = Permissions.inputMonitoring()
+
+        if accessibility.isGranted { ok("Accessibility: granted") } else { bad("Accessibility: \(accessibility)") }
+        if monitoring.isGranted { ok("Input Monitoring: granted") } else { bad("Input Monitoring: \(monitoring)") }
+        guard accessibility.isGranted, monitoring.isGranted else {
+            explainCapturePermissions()
+            throw ExitSilently(code: 1)
+        }
+        out()
+
+        let seen = Box<[String: Int]>([:])
+        let tap = EventTap { type, event in
+            let name: String
+            switch type {
+            case .mouseMoved: name = "pointer"
+            case .scrollWheel: name = "scroll"
+            case .keyDown, .keyUp: name = "key"
+            case .flagsChanged: name = "modifier"
+            case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+                 .otherMouseDown, .otherMouseUp: name = "button"
+            default: name = "other"
+            }
+            seen.mutate { $0[name, default: 0] += 1 }
+            return event   // never swallow: there is nowhere to send anything
+        }
+
+        do {
+            try tap.start()
+        } catch {
+            bad(error.localizedDescription)
+            explainCapturePermissions()
+            throw ExitSilently(code: 1)
+        }
+        defer { tap.stop() }
+        ok("event tap installed")
+
+        // Drive the tap with synthetic events so the check does not depend on the person
+        // running it remembering to wiggle the mouse.
+        let injector = EventInjector()
+        let start = Displays.pointerLocation
+        let main = Displays.current().first(where: \.isMain)?.rect
+            ?? ScreenRect(x: 0, y: 0, width: 800, height: 600)
+
+        info("posting synthetic events and watching them arrive…")
+        for step in 0..<40 {
+            let t = Double(step) / 40
+            injector.move(to: ScreenPoint(x: main.midX - 80 + 160 * t, y: main.midY))
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.004))
+        }
+        injector.scroll(dx: 0, dy: -3, isPixel: true)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+        injector.move(to: start)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+
+        out()
+        let counts = seen.value
+        for (kind, count) in counts.sorted(by: { $0.key < $1.key }) {
+            out("    \(kind.padding(toLength: 10, withPad: " ", startingAt: 0)) \(count)")
+        }
+        out()
+
+        guard (counts["pointer"] ?? 0) > 0 else {
+            bad("the tap was installed but no pointer events arrived")
+            out(Style.dim("    This is what a stale permission looks like: granted in System Settings,"))
+            out(Style.dim("    but not actually in force. Untick and re-tick Continuous, then retry."))
+            throw ExitSilently(code: 1)
+        }
+        ok("capture works — \(counts.values.reduce(0, +)) events observed")
+        info("nothing was swallowed: with no link there is nowhere to send input,")
+        info("and that is exactly when this Mac must keep every event for itself.")
+    }
+
     // MARK: - remote-test
 
     /// The real milestone-2 check: drive the *other* Mac's pointer across the link.

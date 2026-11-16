@@ -49,6 +49,9 @@ public struct Pairing: Codable, Sendable {
     public var createdAt: Date
     public var peerDeviceID: DeviceID?
     public var peerName: String?
+    /// The peer's mDNS hostname, learned during the handshake. On networks where Bonjour
+    /// browsing is blocked — most corporate ones — this is how the Mac is found again.
+    public var peerHostName: String?
     public var lastEndpoint: String?
     public var lastSeenAt: Date?
     /// The other Mac's screen arrangement as of the last connection, so `continuous layout`
@@ -188,6 +191,7 @@ public class PairingDirectory: @unchecked Sendable {
             let wasUnbound = store.pairings[idx].peerDeviceID == nil
             store.pairings[idx].peerDeviceID = peer.deviceID
             store.pairings[idx].peerName = peer.name
+            if !peer.hostName.isEmpty { store.pairings[idx].peerHostName = peer.hostName }
             store.pairings[idx].lastEndpoint = peer.endpoint
             store.pairings[idx].lastSeenAt = Date()
             if wasUnbound { bound = store.pairings[idx] }

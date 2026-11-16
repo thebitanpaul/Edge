@@ -16,6 +16,9 @@ let usage = """
       continuous pair join <CODE> --label "Work Mac"
       continuous connect                 \(Style.dim("# no argument needed with one pairing"))
 
+  Then push the pointer off the edge of your screen towards the other Mac.
+  Hold \(Style.bold("⌘ ⌥ ⌃ ⇧")) together to bring it straight back at any time.
+
   \(Style.dim("A target may be a pairing label, a device id, a Bonjour name or an address."))
 
 \(Style.bold("COMMANDS"))
@@ -30,12 +33,13 @@ let usage = """
   pair forget <NAME>      Delete a pairing and stop accepting its key
 
   listen                  Accept links from a paired Mac, and act on what it sends
-  connect <HOST|NAME>     Dial a listening Mac and hold the link open
+  connect [HOST|NAME]     Share this Mac's keyboard and mouse with a paired Mac
   discover                Browse the local network for listening Macs
 
   layout                  Show how both Macs' screens combine into one desktop
   layout set <EDGE>       Where the other Mac sits: left, right, top or bottom
   inject-test             Move this Mac's own pointer, to check Accessibility
+  capture-test            Check this Mac can capture input, without connecting
   remote-test [HOST]      Drive the OTHER Mac's pointer across the link
 
   config show             Print the effective configuration
@@ -49,6 +53,7 @@ let usage = """
   --force                 Listen even without Accessibility granted
   --port <N>              TCP port (default 52777)
   --duration <SECONDS>    Hold a connection for a fixed time, then exit
+  --link-only             Connect without capturing this Mac's keyboard or mouse
   --no-bonjour            Do not advertise over Bonjour when listening
   --allow-public          Accept links from outside the private address ranges
   --rebind                Let a pinned pairing bind to a different Mac
@@ -148,6 +153,8 @@ do {
     case "layout":      try Commands.layout(args)
     case "inject-test", "selftest-inject":
                         try Commands.injectTest(args)
+    case "capture-test", "selftest-capture":
+                        try Commands.captureTest(args)
     case "remote-test", "selftest-remote":
                         try Commands.remoteTest(args)
     case "pair":     try Commands.pair(args)

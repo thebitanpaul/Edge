@@ -233,6 +233,16 @@ public enum NetworkAddress {
         }
     }
 
+    /// True when the peer is this very machine. Distinct from the device-id check: two
+    /// instances on one Mac with separate state directories have different identities but are
+    /// still, physically, the same keyboard and the same screen.
+    public static func isLoopback(_ endpoint: NWEndpoint?) -> Bool {
+        guard let bytes = addressBytes(endpoint) else { return false }
+        if bytes.count == 4 { return bytes[0] == 127 }
+        if bytes.count == 16 { return bytes == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] }
+        return false
+    }
+
     public static func describe(_ endpoint: NWEndpoint?) -> String {
         guard let endpoint else { return "unknown" }
         switch endpoint {

@@ -20,11 +20,11 @@ only to the other Mac, and the code that holds those permissions is in this repo
           no cloud · no account · no third-party server
 ```
 
-**Status: milestone 2 of 5.** The secure link works, and the receiving Mac can now be driven
-— pointer, buttons, drag, scroll and keys — across it. The two Macs exchange their screen
-arrangements and combine them into one desktop. What is still missing is milestone 3: capturing
-your real keyboard and mouse and switching at the screen edge. See [BLUEPRINT.md](BLUEPRINT.md)
-for the plan and [docs/SECURITY.md](docs/SECURITY.md) for the security model.
+**Status: milestone 3 of 5 — it works.** Push the pointer off the edge of one Mac and it
+appears on the other, with the keyboard following it. What remains is polish: reconnecting by
+itself, starting at login, input-method handling, and an optional clipboard. See
+[BLUEPRINT.md](BLUEPRINT.md) for the plan and [docs/SECURITY.md](docs/SECURITY.md) for the
+security model.
 
 ---
 
@@ -69,7 +69,7 @@ The code carries 128 bits of secret and is the only thing the two Macs ever shar
 checksummed, so a typo is reported as a typo instead of failing later as an unexplained
 connection error.
 
-## Connect
+## Use it
 
 On the Mac lending its screen:
 
@@ -80,9 +80,17 @@ continuous listen
 On the Mac with the keyboard:
 
 ```bash
-continuous connect "Personal Mac"      # by Bonjour name
+continuous connect                     # finds the Mac this pairing is pinned to
 continuous connect 192.168.1.42        # or straight by address
 ```
+
+Then **push the pointer off the edge of your screen** towards the other Mac. It crosses over,
+and your keyboard goes with it. Push back the other way to return.
+
+Hold **⌘ ⌥ ⌃ ⇧** together at any time to bring the pointer straight back. You should not need
+it — the pointer also returns on its own if the link drops, if the other Mac goes quiet for
+four seconds, or if macOS disables the event tap — but it is there, it is checked before
+anything else, and it works even if everything else has gone wrong.
 
 ```
 ✓ link up  →  Personal Mac  [Z0P8GCY3]  192.168.1.42:52777
@@ -161,6 +169,27 @@ Useful options: `--port`, `--pair <label>` (when you have more than one pairing)
 `connect` takes a pairing label, a device id, a Bonjour name, or an address — and with a single
 pairing it takes nothing at all. It looks for the Mac that pairing is pinned to, and falls back
 to the address it was last seen on.
+
+## Permissions
+
+| | |
+| --- | --- |
+| Mac with the keyboard | **Input Monitoring** and **Accessibility** — to read events and to swallow them |
+| Mac lending its screen | **Accessibility** — to synthesize events into its own apps |
+
+Grant them to `Continuous.app`, not to your terminal. macOS attributes a permission to whatever
+launched the process, so running the bare binary from a shell hands Accessibility to your
+terminal or editor — a far broader grant than you meant to make, and one that survives long
+after you stop using this.
+
+```bash
+continuous permissions        # what is granted, and how to grant the rest
+continuous capture-test       # can this Mac capture input?
+continuous inject-test        # can this Mac be driven?
+```
+
+A rebuild changes the ad-hoc signature, so macOS may treat it as a new app and ask again. If a
+permission is ticked but clearly not in force, untick and re-tick it.
 
 ## Where state lives
 

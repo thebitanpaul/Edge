@@ -153,14 +153,40 @@ reconfiguration watching, and the combined-desktop maths with an ASCII plan of t
 **Verify:** `continuous inject-test` moves this Mac's own pointer; `continuous remote-test`
 drives the *other* Mac's pointer across the link; `continuous layout` draws the arrangement.
 
-### M3 — Capture & edge switching  *(next)*
-`CGEventTap` on the sending Mac, consume-and-forward, cursor park/hide, and the switch at the
-shared edge driven by the layout built in M2.
-**Verify:** the real thing — pointer and keyboard cross between the two Macs.
+### ✅ M3 — Capture & edge switching  *(delivered)*
+`CGEventTap` in active mode on the sending Mac: pointer, buttons, drag, scroll, keys and
+modifiers are consumed and forwarded while the pointer is away. The hardware is detached from
+the local pointer so movement arrives as deltas, the local cursor is parked and hidden, and the
+switch at the shared edge is driven by the M2 layout.
+**Verify:** `continuous capture-test` proves this Mac can capture; then `continuous connect`
+and push the pointer off the edge towards the other Mac.
 
-### M4 — Fidelity & robustness
-Key repeat, dead keys, multi-display layouts, auto-reconnect with backoff, a hotkey to force
-a switch, LaunchAgent so it starts at login, latency instrumentation.
+#### Not being able to get your Mac back is the real failure mode
+
+While the pointer is away, every event is swallowed. If that outlived the link, the Mac would
+be left with no keyboard and no pointer. So there are four independent routes back, and the
+decision logic lives in `PointerRouter` — a plain value type with no sockets, no CoreGraphics
+and no clock, so it can be tested exhaustively rather than by getting locked out:
+
+| Route back | Trigger |
+| --- | --- |
+| the link closes | peer quit, network dropped, process killed |
+| the heartbeat goes quiet | no pong for 4 s |
+| the escape chord | ⌘ ⌥ ⌃ ⇧ held together, checked before anything else |
+| the tap is disabled | macOS turns off a tap whose handler was too slow |
+
+Two invariants hold above all: nothing is ever swallowed unless the link is up *and* the other
+Mac's screen arrangement is known, and every route back goes through one function, so none of
+them can forget to re-attach the hardware or un-hide the cursor.
+
+Input sharing is also refused when both ends turn out to be the same Mac — over loopback, or
+with a matching device id. The events one end injects would re-enter the tap that produced
+them, and each lap round that loop makes another event.
+
+### M4 — Fidelity & robustness  *(next)*
+
+Dead keys and input methods, auto-reconnect with backoff, a LaunchAgent so it starts at login,
+latency instrumentation, and a menu-bar indicator for which Mac has the pointer.
 
 ### M5 — Comfort (optional, each opt-in)
 Clipboard sync, a menu-bar status item, a small config UI.
