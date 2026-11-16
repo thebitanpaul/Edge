@@ -61,6 +61,34 @@ public final class Discovery {
         browser = nil
     }
 
+    /// Browses until `match` accepts a result or `timeout` elapses, whichever comes first.
+    ///
+    /// Returning early matters: when you already know which Mac you want, waiting out a fixed
+    /// browse window adds seconds to every connect for no reason.
+    public static func first(matching match: @escaping (DiscoveredPeer) -> Bool,
+                             timeout: TimeInterval) -> DiscoveredPeer? {
+        let discovery = Discovery()
+        let lock = NSLock()
+        var found: DiscoveredPeer?
+
+        discovery.onChange = { peers in
+            lock.lock()
+            if found == nil { found = peers.first(where: match) }
+            lock.unlock()
+        }
+        discovery.start()
+        defer { discovery.stop() }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            lock.lock(); let hit = found; lock.unlock()
+            if let hit { return hit }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        lock.lock(); defer { lock.unlock() }
+        return found
+    }
+
     /// Blocking convenience used by the CLI: browse for `duration`, then return what was seen.
     public static func scan(duration: TimeInterval) -> [DiscoveredPeer] {
         let discovery = Discovery()

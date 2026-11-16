@@ -20,10 +20,11 @@ only to the other Mac, and the code that holds those permissions is in this repo
           no cloud · no account · no third-party server
 ```
 
-**Status: milestone 1 of 5 — the secure link.** Pairing, encryption, discovery and the
-connection between the two Macs all work and are tested. Input capture and injection are
-milestones 2 and 3. See [BLUEPRINT.md](BLUEPRINT.md) for the plan and
-[docs/SECURITY.md](docs/SECURITY.md) for the design of the security model.
+**Status: milestone 2 of 5.** The secure link works, and the receiving Mac can now be driven
+— pointer, buttons, drag, scroll and keys — across it. The two Macs exchange their screen
+arrangements and combine them into one desktop. What is still missing is milestone 3: capturing
+your real keyboard and mouse and switching at the screen edge. See [BLUEPRINT.md](BLUEPRINT.md)
+for the plan and [docs/SECURITY.md](docs/SECURITY.md) for the security model.
 
 ---
 
@@ -93,6 +94,38 @@ continuous connect 192.168.1.42        # or straight by address
 That round-trip number is worth watching. Under about 5 ms the pointer will feel attached to
 your hand; much above that and you will notice it.
 
+## Three screens, one of them switchable
+
+The arrangement this was built for: personal Mac on the left, an external monitor in the middle
+that switches between the two machines, work Mac on the right.
+
+```
+   personal Mac        external monitor        work Mac
+   ┌──────────┐        ┌──────────────┐        ┌──────────┐
+   │ built-in │        │   switchable │        │ built-in │
+   └──────────┘        └──────────────┘        └──────────┘
+```
+
+Each Mac reports *all* of its displays, and the layout is built from the union of them, so the
+monitor needs no special handling: plugged into the left Mac it widens that Mac's desktop and
+the handover point moves right; switched to the right Mac it widens that one instead. Both
+sides watch for displays being plugged in or rearranged and re-send their layout, so a switch
+takes effect without reconnecting.
+
+```bash
+continuous layout                   # draw the combined desktop
+continuous layout set right         # the other Mac is to my right
+continuous layout set right center  # ...and line the screens up by their middles
+```
+
+Arrange each Mac's own displays in System Settings ▸ Displays as they sit on your desk; the
+monitor should be to the *right* of the built-in screen on the personal Mac, and to the *left*
+of the built-in screen on the work Mac.
+
+When the two Macs' screens are different heights, `proportional` alignment (the default) means
+the pointer leaves at the same fraction of the way down the edge as it arrives, so every part
+of the taller screen stays reachable. `start`, `center` and `end` keep a 1:1 scale instead.
+
 ### Over a USB-C or Thunderbolt cable
 
 A Thunderbolt cable between two Macs appears as an ordinary network interface, so everything
@@ -112,13 +145,22 @@ blocks peer-to-peer traffic.
 | `continuous pair join <CODE>` | accept a pairing code |
 | `continuous pair list` | show pairings and what they are bound to |
 | `continuous pair forget <NAME>` | revoke a pairing |
-| `continuous listen` | accept links from a paired Mac |
-| `continuous connect <HOST\|NAME>` | dial a listening Mac |
+| `continuous listen` | accept links from a paired Mac, and act on what it sends |
+| `continuous connect [HOST\|NAME]` | dial a listening Mac |
 | `continuous discover` | browse the network for listening Macs |
+| `continuous layout` | draw how both Macs' screens combine |
+| `continuous layout set <EDGE>` | where the other Mac sits: `left`, `right`, `top`, `bottom` |
+| `continuous inject-test` | move this Mac's own pointer, to check Accessibility |
+| `continuous remote-test` | drive the **other** Mac's pointer across the link |
+| `continuous permissions` | what is granted, and how to grant the rest |
 | `continuous config show` / `set` | settings |
 
 Useful options: `--port`, `--pair <label>` (when you have more than one pairing),
-`--duration <seconds>`, `--no-bonjour`, `--log debug`.
+`--duration <seconds>`, `--no-bonjour`, `--keys`, `--log debug`.
+
+`connect` takes a pairing label, a device id, a Bonjour name, or an address — and with a single
+pairing it takes nothing at all. It looks for the Mac that pairing is pinned to, and falls back
+to the address it was last seen on.
 
 ## Where state lives
 
@@ -146,12 +188,16 @@ reasoning, including what is deliberately *not* defended against, is in
 ## Testing
 
 ```bash
-swift test              # 41 unit tests
-build/continuous selftest   # end-to-end, including the two rejection paths
+Scripts/test.sh                 # unit tests
+build/continuous selftest       # transport end-to-end, including the rejection paths
+build/continuous inject-test    # this Mac can drive its own pointer
+build/continuous remote-test    # this Mac can drive the other Mac's pointer
 ```
 
-If you switch between `swift test` and `Scripts/build.sh` and the build system gets confused
-about macro plugins, `rm -rf .build` clears it.
+Use `Scripts/test.sh` rather than `swift test` directly. swift-testing's macro plugin ships in
+a `testing/` subdirectory that is not on the default plugin search path, so plain `swift test`
+fails with `plugin for module 'TestingMacros' not found`; the script passes the right
+`-plugin-path`.
 
 ## Licence
 

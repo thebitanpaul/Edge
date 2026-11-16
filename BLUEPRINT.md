@@ -76,6 +76,39 @@ shows up as a normal network interface (`bridge0`), so the exact same code path 
 Length-prefixed binary frames — `[u32be length][u8 type][payload]`, 64 KiB cap.
 A mouse move is 21 bytes on the wire. No JSON anywhere in the hot path.
 
+### Screens, and a monitor that moves between the two Macs
+
+Each Mac reports **all** of its displays, and the layout works on the *union* of them rather
+than on any single screen. That one decision is what handles the intended desk: a monitor
+sitting physically between the two Macs, switched from one input to the other.
+
+```
+   personal Mac        external monitor        work Mac
+   ┌──────────┐        ┌──────────────┐        ┌──────────┐
+   │ built-in │        │   switchable │        │ built-in │
+   └──────────┘        └──────────────┘        └──────────┘
+   └── when the monitor is on the personal Mac ──┘
+                   └── when it is on the work Mac ──────┘
+```
+
+Plugged into the left Mac, the monitor simply widens that Mac's union and the handover point
+moves right. Switched to the right Mac, it widens the right one instead and the handover point
+moves left. Neither side needs to know the monitor exists, and the combined desktop keeps the
+same total shape either way — which is tested, not assumed.
+
+Two details that matter in practice:
+
+* **Unions are not rectangles.** A laptop screen beside a taller monitor leaves corners that
+  are inside the bounding box but on no actual screen. Every coordinate handed to the other Mac
+  is snapped to the nearest real display, so the pointer can never be parked in a gap.
+* **Alignment, when the screens are different heights.** The default is `proportional`: the
+  pointer leaves at the same fraction of the way down the edge as it arrives. With fixed
+  alignments, parts of a taller screen simply cannot be reached from a shorter one.
+  `continuous layout set right center` if you prefer straight-line crossings.
+
+Both sides watch for display reconfiguration and re-send their layout, so switching the monitor
+updates the arrangement without reconnecting.
+
 ### A finding worth recording
 
 The original plan said "TLS 1.3 with a pre-shared key". That turns out not to be available:
@@ -112,14 +145,17 @@ challenge/response, device pinning, framed codec, Bonjour discovery, RTT measure
 **Verify:** `continuous selftest` passes on one Mac; then pair the two Macs and
 `continuous connect` reports a live link with a round-trip time.
 
-### M2 — Injection
-`CGEventPost` synthesis on the client: absolute pointer moves, buttons, drag, scroll,
-key down/up with modifiers. Permission prompting and `.app` bundle.
-**Verify:** `continuous selftest-inject` draws a square with your pointer and types a test string.
+### ✅ M2 — Injection and screen geometry  *(delivered)*
+`CGEventPost` synthesis on the receiving Mac: absolute pointer moves, drag, buttons with click
+counts, scroll, keys by virtual key code, modifier changes, and a release-everything safety net
+for a link that drops mid-drag. Display enumeration on both sides, live `screenInfo` exchange,
+reconfiguration watching, and the combined-desktop maths with an ASCII plan of the arrangement.
+**Verify:** `continuous inject-test` moves this Mac's own pointer; `continuous remote-test`
+drives the *other* Mac's pointer across the link; `continuous layout` draws the arrangement.
 
-### M3 — Capture & edge switching
-`CGEventTap` on the host, screen-edge geometry, cursor park/hide, consume-and-forward,
-return-edge detection.
+### M3 — Capture & edge switching  *(next)*
+`CGEventTap` on the sending Mac, consume-and-forward, cursor park/hide, and the switch at the
+shared edge driven by the layout built in M2.
 **Verify:** the real thing — pointer and keyboard cross between the two Macs.
 
 ### M4 — Fidelity & robustness

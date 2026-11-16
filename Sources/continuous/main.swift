@@ -14,21 +14,29 @@ let usage = """
 
   On the Mac with the \(Style.bold("keyboard and mouse")):
       continuous pair join <CODE> --label "Work Mac"
-      continuous connect <name-or-ip>
+      continuous connect                 \(Style.dim("# no argument needed with one pairing"))
+
+  \(Style.dim("A target may be a pairing label, a device id, a Bonjour name or an address."))
 
 \(Style.bold("COMMANDS"))
   doctor                  Environment, permissions, pairings and network report
   id                      Show this Mac's device identity
   selftest                Run the full crypto + transport check over loopback
+  permissions             Show privacy permissions, and how to grant them
 
   pair init               Generate a pairing code on this Mac
   pair join <CODE>        Accept a pairing code from the other Mac
   pair list               Show stored pairings
   pair forget <NAME>      Delete a pairing and stop accepting its key
 
-  listen                  Accept links from a paired Mac
+  listen                  Accept links from a paired Mac, and act on what it sends
   connect <HOST|NAME>     Dial a listening Mac and hold the link open
   discover                Browse the local network for listening Macs
+
+  layout                  Show how both Macs' screens combine into one desktop
+  layout set <EDGE>       Where the other Mac sits: left, right, top or bottom
+  inject-test             Move this Mac's own pointer, to check Accessibility
+  remote-test [HOST]      Drive the OTHER Mac's pointer across the link
 
   config show             Print the effective configuration
   config set <KEY> <VAL>  Change a configuration value
@@ -36,6 +44,9 @@ let usage = """
 \(Style.bold("OPTIONS"))
   --label <TEXT>          Name for a pairing (pair init / pair join)
   --pair <LABEL>          Which pairing to dial with, when more than one exists
+  --alignment <MODE>      proportional | start | center | end (layout set)
+  --keys                  Also exercise keyboard injection in the test commands
+  --force                 Listen even without Accessibility granted
   --port <N>              TCP port (default 52777)
   --duration <SECONDS>    Hold a connection for a fixed time, then exit
   --no-bonjour            Do not advertise over Bonjour when listening
@@ -75,6 +86,16 @@ func runConfig(_ args: Args) throws {
             config.requireLocalNetwork = ["true", "yes", "1", "on"].contains(value.lowercased())
         case "bonjourEnabled":
             config.bonjourEnabled = ["true", "yes", "1", "on"].contains(value.lowercased())
+        case "remoteEdge":
+            guard ScreenEdge.parse(value) != nil else {
+                throw ContinuousError.invalidArgument("remoteEdge must be left, right, top or bottom")
+            }
+            config.remoteEdge = value.lowercased()
+        case "remoteAlignment":
+            guard let a = ScreenAlignment.parse(value) else {
+                throw ContinuousError.invalidArgument("remoteAlignment must be proportional, start, center or end")
+            }
+            config.remoteAlignment = a.rawValue
         case "logLevel":
             guard LogLevel.parse(value) != nil else {
                 throw ContinuousError.invalidArgument("logLevel must be trace, debug, info, warn or error")
@@ -82,7 +103,7 @@ func runConfig(_ args: Args) throws {
             config.logLevel = value.lowercased()
         default:
             throw ContinuousError.invalidArgument(
-                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled or logLevel")
+                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment or logLevel")
         }
         try config.save()
         ok("\(key) = \(value)")
@@ -120,9 +141,15 @@ if let level = args.string("log").flatMap(LogLevel.parse) {
 
 do {
     switch command! {
-    case "doctor":   try Commands.doctor(args)
-    case "id":       try Commands.identity(args)
-    case "selftest": try Commands.selftest(args)
+    case "doctor":      try Commands.doctor(args)
+    case "id":          try Commands.identity(args)
+    case "selftest":    try Commands.selftest(args)
+    case "permissions": try Commands.permissions(args)
+    case "layout":      try Commands.layout(args)
+    case "inject-test", "selftest-inject":
+                        try Commands.injectTest(args)
+    case "remote-test", "selftest-remote":
+                        try Commands.remoteTest(args)
     case "pair":     try Commands.pair(args)
     case "listen":   try Commands.listen(args)
     case "connect":  try Commands.connect(args)

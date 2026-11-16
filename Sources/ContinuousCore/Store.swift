@@ -51,6 +51,9 @@ public struct Pairing: Codable, Sendable {
     public var peerName: String?
     public var lastEndpoint: String?
     public var lastSeenAt: Date?
+    /// The other Mac's screen arrangement as of the last connection, so `continuous layout`
+    /// can show the combined desktop without needing a live link.
+    public var peerDisplays: [Display]?
 
     public init(psk: Data, label: String, createdAt: Date = Date()) {
         self.psk = psk
@@ -194,6 +197,17 @@ public class PairingDirectory: @unchecked Sendable {
         if let bound { onBind?(bound) }
     }
 
+    /// Caches the other Mac's screen arrangement against its pairing.
+    public func noteDisplays(_ displays: [Display], forKeyID keyID: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let idx = store.pairings.firstIndex(where: { Crypto.constantTimeEquals($0.keyID, keyID) })
+        else { return }
+        guard store.pairings[idx].peerDisplays != displays else { return }
+        store.pairings[idx].peerDisplays = displays
+        try? persist(store)
+    }
+
     public func mutate(_ body: (inout SecretStore) throws -> Void) throws {
         lock.lock(); defer { lock.unlock() }
         try body(&store)
@@ -212,12 +226,20 @@ public struct Config: Codable, Sendable {
     public var requireLocalNetwork: Bool = true
     /// Advertise over Bonjour so the other Mac can be found without typing an IP address.
     public var bonjourEnabled: Bool = true
+    /// Which side of this Mac's screens the other Mac sits on, physically.
+    public var remoteEdge: String = "right"
+    /// How the two Macs line up along that edge when the screens are different sizes.
+    public var remoteAlignment: String = "proportional"
     public var logLevel: String = "info"
 
     public init() {}
 
+    public var edge: ScreenEdge { ScreenEdge.parse(remoteEdge) ?? .right }
+    public var alignment: ScreenAlignment { ScreenAlignment.parse(remoteAlignment) ?? .proportional }
+
     enum CodingKeys: String, CodingKey {
         case version, port, requireLocalNetwork, bonjourEnabled, logLevel
+        case remoteEdge, remoteAlignment
         case requirePrivateNetwork   // the name this setting had before 0.1.0
     }
 
@@ -232,6 +254,8 @@ public struct Config: Codable, Sendable {
             ?? c.decodeIfPresent(Bool.self, forKey: .requirePrivateNetwork)
             ?? true
         bonjourEnabled = try c.decodeIfPresent(Bool.self, forKey: .bonjourEnabled) ?? true
+        remoteEdge = try c.decodeIfPresent(String.self, forKey: .remoteEdge) ?? "right"
+        remoteAlignment = try c.decodeIfPresent(String.self, forKey: .remoteAlignment) ?? "proportional"
         logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? "info"
     }
 
@@ -241,6 +265,8 @@ public struct Config: Codable, Sendable {
         try c.encode(port, forKey: .port)
         try c.encode(requireLocalNetwork, forKey: .requireLocalNetwork)
         try c.encode(bonjourEnabled, forKey: .bonjourEnabled)
+        try c.encode(remoteEdge, forKey: .remoteEdge)
+        try c.encode(remoteAlignment, forKey: .remoteAlignment)
         try c.encode(logLevel, forKey: .logLevel)
     }
 

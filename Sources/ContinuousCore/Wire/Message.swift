@@ -50,7 +50,7 @@ public enum MessageType: UInt8, Sendable {
 
 // MARK: - Payloads
 
-public struct Display: Sendable, Equatable {
+public struct Display: Sendable, Equatable, Codable {
     public var x: Int32, y: Int32, width: Int32, height: Int32
     public var isMain: Bool
     public init(x: Int32, y: Int32, width: Int32, height: Int32, isMain: Bool) {

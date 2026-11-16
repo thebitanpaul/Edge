@@ -33,7 +33,7 @@ struct Args {
     /// Flags that take no value, so `--no-bonjour listen` is not misread.
     static let booleanFlags: Set<String> = [
         "help", "version", "no-bonjour", "allow-public", "rebind",
-        "json", "quiet", "prompt", "force", "once",
+        "json", "quiet", "prompt", "no-prompt", "force", "once", "keys", "no-pointer",
     ]
 
     init(_ argv: [String]) {
@@ -118,6 +118,18 @@ enum Runtime {
     }
 
     nonisolated(unsafe) static var interrupted = false
+
+    /// Spins the main run loop until Ctrl-C.
+    ///
+    /// Not the same as sleeping in a loop: CoreGraphics delivers display-reconfiguration
+    /// callbacks — and, from milestone 3, event taps — through the run loop, so a plain sleep
+    /// would silently never see a monitor being plugged in.
+    static func runUntilInterrupted(onTick: (() -> Void)? = nil) {
+        while !interrupted {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+            onTick?()
+        }
+    }
 
     static func installSignalHandlers() {
         signal(SIGINT, SIG_IGN)
