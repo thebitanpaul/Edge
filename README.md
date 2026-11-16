@@ -55,13 +55,13 @@ continuous pair init --label "Personal Mac"
 ```
   Pairing code for Personal Mac
 
-      HQT5-GTRX-RQ7X-AZTV-9038-QRZ7-YRM8
+      44WH-C0GW-VX6E-SDR4-6V3Y-3NHH-GRZ4
 ```
 
 On the Mac with the **keyboard and mouse**, type that code:
 
 ```bash
-continuous pair join HQT5-GTRX-RQ7X-AZTV-9038-QRZ7-YRM8 --label "Work Mac"
+continuous pair join 44WH-C0GW-VX6E-SDR4-6V3Y-3NHH-GRZ4 --label "Work Mac"
 ```
 
 The code carries 128 bits of secret and is the only thing the two Macs ever share. It is
