@@ -183,10 +183,45 @@ Input sharing is also refused when both ends turn out to be the same Mac — ove
 with a matching device id. The events one end injects would re-enter the tap that produced
 them, and each lap round that loop makes another event.
 
-### M4 — Fidelity & robustness  *(next)*
+### ✅ M4 — Living with it  *(delivered)*
 
-Dead keys and input methods, auto-reconnect with backoff, a LaunchAgent so it starts at login,
-latency instrumentation, and a menu-bar indicator for which Mac has the pointer.
+Auto-reconnect with exponential backoff, a user LaunchAgent so it starts at login, a `status`
+command backed by a small state file, a stable self-signed code identity so macOS stops asking
+for permissions after every rebuild, and an app icon.
+
+#### The two-pointers bug: three attempts
+
+A second cursor kept mirroring your hand on the sending Mac while the pointer was on the other
+one. It took three goes, and the first two were reasonable-sounding theories that happened to
+be wrong.
+
+**Attempt 1 — the tap level.** `.cgSessionEventTap` sees an event only after the window server
+has moved the cursor, so deleting it hides the movement from applications but not from your
+eyes. Moved to `.cghidEventTap`. Correct, necessary, and insufficient.
+
+**Attempt 2 — the ordering, and the entry inset.** Warping the cursor re-couples it to the
+hardware, so detaching and *then* parking undid the detach; parking first fixed that.
+Separately the pointer arrived two pixels inside the far screen, so the smallest movement back
+threw it home, leaving a stranded cursor on each machine. That became edge pressure: you must
+lean on an edge to go through it. Both were real bugs. Neither was *this* bug.
+
+**Attempt 3 — stop trusting the APIs.** `CGAssociateMouseAndMouseCursorPosition(0)` returns
+success. `CGDisplayHideCursor` returns success. Deleting the event at the HID tap succeeds. On
+this macOS the cursor moves anyway. So its position is no longer assumed — it is enforced:
+after every movement the real cursor position is read and corrected if it has strayed, and the
+detach is renewed, because warping re-couples the pointer. Measured here at 0.21 µs to read and
+37.7 µs to correct: under 1% of a core at a few hundred events a second.
+
+The useful lesson is about testing. The obvious check — swallow a movement, assert the cursor
+did not move — cannot be driven by synthetic events, because those carry an absolute position
+and move the cursor as they are posted whether or not a tap deletes them. Pinning *can* be
+tested that way, because it reads the real position and corrects it. So `capture-test` verifies
+pinning automatically, and asks for four seconds of real mouse movement for the rest.
+
+**Also fixed:** a drag towards the far edge used to hand the pointer over mid-drag, stranding
+whatever you were moving. Crossing is now blocked while any mouse button is held.
+
+### M5 — Comfort (optional, each opt-in)
 
 Clipboard sync, a menu-bar status item, dead keys and input methods, a small config UI.
 
