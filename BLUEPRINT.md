@@ -512,6 +512,40 @@ preference is offered only on the primary Mac, since a listening Mac accepts wha
 and the setting does nothing there. Diagnostics moved under Help, and the prompts were cut to
 about a third of their length.
 
+#### A text field that ignored every keystroke
+
+`NSApp.activate` was not the fix, or not the whole one. The window was being opened from
+inside a menu action, while AppKit is still running the menu's own modal tracking session — a
+window opened there never becomes key, so nothing reaches a text field in it. Every action that
+opens a window now defers by one turn of the run loop, which lets the menu finish closing
+first.
+
+Worth noting what the symptom looks like from outside: not "the app is busy" but "this field
+is broken", which is why it was reported twice.
+
+#### Pairing over a cable needed no new mechanism
+
+The question was whether a cable needs its own pairing path. It does not: `mDNS` already
+advertises on the Thunderbolt interface — confirmed by registering a service and watching it
+appear on interface index 23, which is the bridge — so *Connect to a nearby Mac* works over a
+cable exactly as it does over Wi-Fi. What stopped it before was this code restricting pairing
+to the Wi-Fi interface, fixed in the previous round.
+
+The manual address stays as a fallback for networks that block discovery, and the two addresses
+are now labelled *network* and *cable* rather than offered as an unexplained pair.
+
+#### Only one side was recording the arrangement
+
+*Show arrangement* reported "not connected yet" on a Mac that had been connected for an hour.
+The dialling side stored the other Mac's screens; the listening side only logged them. So the
+secondary Mac could never draw an arrangement, however long it had been running.
+
+It is drawn now rather than printed: screens as rectangles to scale, in a window, with the edge
+and the alignment set from the same place — the Displays settings answer "is this right?" at a
+glance and an ASCII diagram in an alert does not. The controls are editable on the primary
+only, since the arrangement decides where *that* Mac's pointer goes and the secondary has no
+say in it.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 

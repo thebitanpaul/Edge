@@ -41,6 +41,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var lastKnownState: RuntimeState?
     private var lastIconSignature = ""
     private var blinkTimer: Timer?
+    private var arrangementWindow: ArrangementWindowController?
     private var blinkOn = true
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
@@ -282,6 +283,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// at?* — and the wording described each Mac in terms of what it does for the other,
     /// which is the wrong way round for someone trying to choose.
     @objc private func runSetup() {
+        // Deferred by one turn of the run loop so menu tracking ends first; a window opened
+        // while the menu is still tracking never becomes key, and its text fields silently
+        // ignore every keystroke.
+        DispatchQueue.main.async { [weak self] in self?.performSetup() }
+    }
+
+    private func performSetup() {
         let alert = NSAlert()
         alert.messageText = "Which Mac is this?"
         alert.informativeText =
@@ -433,7 +441,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func renameDevice(_ sender: NSMenuItem) {
-        guard let label = sender.representedObject as? String else { return }
+        let label = sender.representedObject as? String
+        DispatchQueue.main.async { [weak self] in self?.performRename(label) }
+    }
+
+    private func performRename(_ label: String?) {
+        guard let label else { return }
         let store = (try? SecretStore.load()) ?? SecretStore()
         guard let pairing = store.pairings.first(where: { $0.label == label }) else { return }
 
@@ -451,7 +464,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func setDeviceAddress(_ sender: NSMenuItem) {
-        guard let label = sender.representedObject as? String else { return }
+        let label = sender.representedObject as? String
+        DispatchQueue.main.async { [weak self] in self?.performSetAddress(label) }
+    }
+
+    private func performSetAddress(_ label: String?) {
+        guard let label else { return }
         let store = (try? SecretStore.load()) ?? SecretStore()
         guard let pairing = store.pairings.first(where: { $0.label == label }) else { return }
 
@@ -485,6 +503,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// key or neither saves anything — the failure that typing a code allows, where one side
     /// quietly ends up with a different key, cannot happen here.
     @objc private func pairNearby() {
+        // Deferred by one turn of the run loop so menu tracking ends first; a window opened
+        // while the menu is still tracking never becomes key, and its text fields silently
+        // ignore every keystroke.
+        DispatchQueue.main.async { [weak self] in self?.performPairNearby() }
+    }
+
+    private func performPairNearby() {
         guard let identity = try? Identity.loadOrCreate() else { return }
         let config = (try? Config.load()) ?? Config()
         runPairing(NetworkPairingSession(identity: identity, link: config.link),
@@ -493,19 +518,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     /// The modal half, shared by discovery and by dialling a known address.
     private func runPairing(_ session: NetworkPairingSession, allowAddressFallback: Bool) {
-        // One address, not a list. Offering two and leaving the choice to the reader is how
-        // "which one do I type?" happens; the cable is always the better answer when it
-        // exists, so pick it.
+        // Labelled, because an unlabelled pair of addresses is a question rather than an
+        // answer. Both are shown: which one is wanted depends on how the two Macs are joined,
+        // and only the person looking knows that.
         let addresses = NetworkAddress.localAddresses()
-        let best = addresses.first(where: NetworkAddress.isLinkLocalIPv4) ?? addresses.first
-        let isCable = best.map(NetworkAddress.isLinkLocalIPv4) ?? false
+        let cable = addresses.first(where: NetworkAddress.isLinkLocalIPv4)
+        let wifi = addresses.first(where: { !NetworkAddress.isLinkLocalIPv4($0) })
+        var here = ""
+        if let wifi { here += "\nNetwork:  \(wifi)" }
+        if let cable { here += "\nCable:      \(cable)" }
 
         NSApp.activate(ignoringOtherApps: true)
         let waiting = NSAlert()
         waiting.messageText = "Looking for the other Mac"
         waiting.informativeText =
             "Choose the same on the other Mac. Both will show six digits to compare."
-            + (best.map { "\n\nThis Mac: \($0)" + (isCable ? " (cable)" : "") } ?? "")
+            + (here.isEmpty ? "" : "\n\nThis Mac:\(here)")
         waiting.addButton(withTitle: "Cancel")
         if allowAddressFallback {
             waiting.addButton(withTitle: "Enter the other Mac's address…")
@@ -599,6 +627,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// for: an address is visible in the other Mac's own menu, and getting it wrong fails
     /// immediately instead of looking like a successful pairing that will not connect.
     @objc private func pairNearbyByAddress() {
+        // Deferred by one turn of the run loop so menu tracking ends first; a window opened
+        // while the menu is still tracking never becomes key, and its text fields silently
+        // ignore every keystroke.
+        DispatchQueue.main.async { [weak self] in self?.performPairByAddress() }
+    }
+
+    private func performPairByAddress() {
         guard let address = prompt(
             title: "The other Mac's address",
             explanation: "Choose Connect to a nearby Mac over there; it shows its address.",
@@ -719,7 +754,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func forgetDevice(_ sender: NSMenuItem) {
-        guard let label = sender.representedObject as? String else { return }
+        let label = sender.representedObject as? String
+        DispatchQueue.main.async { [weak self] in self?.performForget(label) }
+    }
+
+    private func performForget(_ label: String?) {
+        guard let label else { return }
         let confirm = NSAlert()
         confirm.messageText = "Forget this Mac?"
         confirm.informativeText = "You will need to pair the two Macs again."
@@ -741,58 +781,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: Arrangement
 
     private func arrangementMenuItem() -> NSMenuItem {
-        let config = (try? Config.load()) ?? Config()
-        let item = NSMenuItem(title: "Screen arrangement", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-
-        submenu.addItem(disabled("The other Mac is to my"))
-        for edge in ScreenEdge.allCases {
-            let title: String
-            switch edge {
-            case .left: title = "Left"
-            case .right: title = "Right"
-            case .top: title = "Above"
-            case .bottom: title = "Below"
-            }
-            let entry = NSMenuItem(title: title, action: #selector(selectEdge(_:)), keyEquivalent: "")
-            entry.target = self
-            entry.state = config.edge == edge ? .on : .off
-            entry.representedObject = edge.rawValue
-            submenu.addItem(entry)
-        }
-
-        submenu.addItem(.separator())
-        submenu.addItem(disabled("If the screens differ in size"))
-        for alignment in ScreenAlignment.allCases {
-            let title: String
-            switch alignment {
-            case .proportional: title = "Stretch to fit (recommended)"
-            case .start: title = "Line up the tops"
-            case .center: title = "Line up the middles"
-            case .end: title = "Line up the bottoms"
-            }
-            let entry = NSMenuItem(title: title, action: #selector(selectAlignment(_:)),
-                                   keyEquivalent: "")
-            entry.target = self
-            entry.state = config.alignment == alignment ? .on : .off
-            entry.representedObject = alignment.rawValue
-            submenu.addItem(entry)
-        }
-
-        submenu.addItem(.separator())
-        submenu.addItem(action("Show…", #selector(showArrangement)))
-        item.submenu = submenu
+        // Opens the window. Everything it offers lives there, so a submenu repeating it would
+        // be a second place to change the same thing.
+        let item = NSMenuItem(title: "Screen arrangement…", action: #selector(showArrangement),
+                              keyEquivalent: "")
+        item.target = self
         return item
-    }
-
-    @objc private func selectEdge(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String else { return }
-        applyConfig { $0.remoteEdge = raw }
-    }
-
-    @objc private func selectAlignment(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String else { return }
-        applyConfig { $0.remoteAlignment = raw }
     }
 
     /// Saves a change and restarts the session, because the arrangement is read when a
@@ -809,31 +803,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func showArrangement() {
-        let store = (try? SecretStore.load()) ?? SecretStore()
-        let config = (try? Config.load()) ?? Config()
+        // Deferred by one turn of the run loop so menu tracking ends first; a window opened
+        // while the menu is still tracking never becomes key, and its text fields silently
+        // ignore every keystroke.
+        DispatchQueue.main.async { [weak self] in self?.performShowArrangement() }
+    }
 
-        guard let pairing = store.pairings.first(where: { ($0.peerDisplays?.isEmpty == false) }),
-              let remote = pairing.peerDisplays,
-              let layout = ScreenLayout(localDisplays: Displays.current(), remoteDisplays: remote,
-                                        edge: config.edge, alignment: config.alignment) else {
-            notify("No arrangement yet",
-                   "Connect once and the other Mac's screens will be remembered here.")
-            return
+    private func performShowArrangement() {
+        if arrangementWindow == nil {
+            // Editable only on the primary: the arrangement decides where that Mac's pointer
+            // goes, and the secondary has no say in it.
+            let controller = ArrangementWindowController(editable: mode == .host)
+            controller.onEdgeChanged = { [weak self] in
+                guard let self, self.isRunning else { return }
+                self.stopSession()
+                self.startSession()
+            }
+            arrangementWindow = controller
         }
-
-        let name = pairing.peerName ?? pairing.label
-        let alert = NSAlert()
-        alert.messageText = "\(name) is to the \(config.remoteEdge)"
-        // A proportional font would turn the diagram into noise.
-        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 140))
-        text.string = layout.diagram(width: 72, localName: "this Mac", remoteName: name)
-        text.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-        text.isEditable = false
-        text.drawsBackground = false
-        alert.accessoryView = text
-        alert.informativeText = "# this Mac   + \(name)   ·   alignment: \(config.remoteAlignment)"
-        alert.addButton(withTitle: "Done")
-        alert.runModal()
+        arrangementWindow?.present()
     }
 
     private func disabled(_ title: String) -> NSMenuItem {
@@ -906,6 +894,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func troubleshoot() {
+        // Deferred by one turn of the run loop so menu tracking ends first; a window opened
+        // while the menu is still tracking never becomes key, and its text fields silently
+        // ignore every keystroke.
+        DispatchQueue.main.async { [weak self] in self?.performTroubleshoot() }
+    }
+
+    private func performTroubleshoot() {
         guard let executable = Bundle.main.executableURL else { return }
         let task = Process()
         task.executableURL = executable

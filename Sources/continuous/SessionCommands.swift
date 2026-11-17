@@ -140,6 +140,9 @@ extension Commands {
             state.mutate { $0.clipboardActive = clipboard.isActive; $0.save() }
             session.clipboard = clipboard
             session.clipboardLimit = clipboardLimit
+            session.onPeerDisplays = { [weak directory] displays, keyID in
+                directory?.noteDisplays(displays, forKeyID: keyID)
+            }
             session.attach(link: link)
         }
 
@@ -536,6 +539,8 @@ extension Commands {
 final class ReceivingSession {
     var clipboard: ClipboardBridge?
     var clipboardLimit: Int = 1 << 20
+    /// Called when the other Mac reports its screens, so they can be remembered.
+    var onPeerDisplays: (([Display], Data) -> Void)?
     private var cursorHidden: LocalPointer.CaptureState?
     private var cursorTimer: DispatchSourceTimer?
     private var lastInjectedAt = ScreenPoint(x: 0, y: 0)
@@ -616,6 +621,12 @@ final class ReceivingSession {
             Log.debug("pointer left")
 
         case let .screenInfo(displays):
+            // Record them, not merely note them. Only the dialling side was storing this, so
+            // the Mac lending its screen could be connected for an hour and still have
+            // nothing to show for the arrangement.
+            if let keyID = link?.peer?.keyID {
+                onPeerDisplays?(displays, keyID)
+            }
             Log.debug("the other Mac has \(displays.count) display(s)")
 
         default:

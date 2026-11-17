@@ -237,6 +237,9 @@ the handover point moves right; switched to the right Mac it widens that one ins
 sides watch for displays being plugged in or rearranged and re-send their layout, so a switch
 takes effect without reconnecting.
 
+**Menu bar ▸ Screen arrangement…** opens a window showing both Macs' screens to scale, with
+the edge and alignment set there. From the terminal:
+
 ```bash
 continuous layout                   # draw the combined desktop
 continuous layout set right         # the other Mac is to my right

@@ -120,12 +120,15 @@ enum Commands {
         out()
         let addresses = NetworkAddress.localAddresses()
         if !addresses.isEmpty {
-            out("  This Mac is at:  \(Style.cyan(addresses.joined(separator: "   ")))")
-            if let cable = addresses.first(where: NetworkAddress.isLinkLocalIPv4) {
-                out(Style.dim("  \(cable) is the cable between the two Macs — quicker than Wi-Fi."))
+            out("  This Mac:")
+            if let wifi = addresses.first(where: { !NetworkAddress.isLinkLocalIPv4($0) }) {
+                out("    network  \(Style.cyan(wifi))")
             }
-            out(Style.dim("  If they do not find each other, give one of those to the other Mac:"))
-            out(Style.dim("      continuous pair nearby --address <this Mac's address>"))
+            if let cable = addresses.first(where: NetworkAddress.isLinkLocalIPv4) {
+                out("    cable    \(Style.cyan(cable))")
+            }
+            out(Style.dim("    (only needed if the two Macs cannot find each other:"))
+            out(Style.dim("     continuous pair nearby --address <the other Mac's address>)"))
             out()
         }
 
