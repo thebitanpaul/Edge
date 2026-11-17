@@ -413,6 +413,28 @@ that does not.
 
 Because of that gap, `auto` prefers a cable when one is advertised.
 
+#### Four from one round of real use
+
+**A pointer sometimes stranded on the screen just left.** Hiding was attempted on the main
+display only, and the cursor is parked wherever it left — which on a Mac with an external
+monitor is usually not the main display. The retry was also gated on the first attempt having
+succeeded, so a hide that failed once stayed failed. Now every display, and the retry runs
+regardless.
+
+**Two Macs could be set to incompatible links.** A listener restricted to Wi-Fi is simply
+unreachable from a Mac that chose the cable, with nothing to say why. The preference is now
+about dialling out only; listening accepts everything, so the combination cannot be made wrong.
+
+**A tooltip followed the cursor around** after the menu had been opened. Removed — the first
+line of the menu says the same thing, in a place that behaves.
+
+**Generating a pairing code created a device.** Both Macs showed "Mac 1" the moment a code was
+made, which reads as success when nothing has happened; typing a code then added a second, so
+one other machine appeared as two. Devices now lists only Macs that have actually connected,
+unused pairings replace one another instead of accumulating, and the typed-code flow goes one
+way: the Mac sharing its keyboard shows the code, the Mac lending its screen types it. Only one
+of them is offered the option, so both cannot sit waiting for the other.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 

@@ -289,8 +289,11 @@ public enum LocalPointer {
         warp(to: point)
 
         state.backgroundControl = enableBackgroundCursorControl()
-        state.hidden = CGDisplayHideCursor(CGMainDisplayID()) == .success
-        if state.hidden { state.hideCount = 1 }
+        // Every display, not just the main one. The cursor is parked wherever it left, which
+        // on a Mac with an external monitor is usually not the main display — and hiding a
+        // display the cursor is not on leaves it sitting there in plain sight.
+        state.hideCount = hideOnAllDisplays()
+        state.hidden = state.hideCount > 0
 
         // Last, deliberately: hiding the cursor re-couples it to the mouse.
         state.uncoupled = CGAssociateMouseAndMouseCursorPosition(0) == .success
@@ -301,13 +304,23 @@ public enum LocalPointer {
         return state
     }
 
+    private static func hideOnAllDisplays() -> Int {
+        var hidden = 0
+        for id in activeDisplayIDs() where CGDisplayHideCursor(id) == .success { hidden += 1 }
+        return hidden
+    }
+
     /// Hides the cursor again if something else put it back. Balanced by `endCapture`.
+    ///
+    /// Deliberately not conditional on the first attempt having worked. Hiding occasionally
+    /// fails — a display mid-reconfiguration, a busy window server — and giving up after one
+    /// failure is what strands a pointer on the screen you have just left.
     public static func reassertHidden(_ state: inout CaptureState) {
-        guard state.hidden else { return }
         enableBackgroundCursorControl()
-        if CGDisplayHideCursor(CGMainDisplayID()) == .success {
-            state.hideCount += 1
-        }
+        let hidden = hideOnAllDisplays()
+        guard hidden > 0 else { return }
+        state.hideCount += hidden
+        state.hidden = true
     }
 
     public static func endCapture(_ state: CaptureState, restoringTo point: ScreenPoint?) {

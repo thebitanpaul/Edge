@@ -307,14 +307,15 @@ final class SharingSession {
             self.lock.lock()
             self.driftSamples += 1
             if drift > self.maxDrift { self.maxDrift = drift }
-            let shouldBeHidden = self.capture.hidden
             self.lock.unlock()
 
             // Something else in the system can un-hide the cursor: AppKit reconsiders it in
             // any process that touches its own interface, and the menu-bar front end is one
             // such process sitting right there. Notice within a frame and put it back, rather
             // than leaving a pointer parked on a screen nobody is using.
-            guard shouldBeHidden, LocalPointer.isCursorVisible == true else { return }
+            // Not gated on the first hide having succeeded: it sometimes does not, and
+            // giving up then is exactly what strands a pointer on the screen just left.
+            guard LocalPointer.isCursorVisible == true else { return }
             self.lock.lock()
             LocalPointer.reassertHidden(&self.capture)
             let total = self.capture.hideCount

@@ -107,10 +107,14 @@ Choose **Devices ▸ Pair with a nearby Mac…** on *both* Macs. Each shows the 
 confirm on both. Nothing is typed, and neither Mac can end up with a key the other does not
 have — either both save the same secret or neither saves anything.
 
-If the two Macs cannot see each other on the network, there is still **Show a pairing code…**
-and **Enter a pairing code…**. Be aware of what that allows: re-pairing one Mac and not the
-other leaves them with different keys, which looks exactly like a mistyped code. Both Macs
-show their key under Devices; if those eight characters match, the pairing is right.
+If the two Macs cannot see each other, a typed code still works, and it goes **one way**:
+
+* the Mac that **shares its keyboard** shows the code
+* the Mac that **lends its screen** types it in
+
+Only that Mac's menu offers to create one, so two Macs cannot both sit waiting for the other
+to type something. A pairing appears under **Devices** once it has actually connected — before
+that it shows as *waiting*, because a code that has been generated is not a paired Mac.
 
 ### The rest of setup
 
@@ -363,6 +367,9 @@ A USB-C or Thunderbolt cable between the two Macs appears as an ordinary wired i
 it is far quicker and steadier than Wi-Fi — which matters, because a pointer follows your hand
 and notices a slow link long before a file transfer would. With both a cable and Wi-Fi
 connected, the system is free to pick either and will usually pick Wi-Fi.
+
+This is about how this Mac **dials out**. Listening is unrestricted, so the two Macs cannot
+be set to incompatible links and left unable to reach each other.
 
 `auto` already prefers a cable when it finds one; the setting is there to insist, or to stay
 on Wi-Fi. Measured between the two Macs this was written for: **1.2 ms over the cable against

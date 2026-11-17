@@ -91,7 +91,11 @@ extension Commands {
             port: config.port,
             requireLocalNetwork: config.requireLocalNetwork,
             bonjourName: config.bonjourEnabled ? identity.deviceName : nil,
-            link: config.link)
+            // Deliberately not config.link: a listener restricted to one kind of link is
+            // simply unreachable from a Mac that chose the other, and nothing says why. The
+            // preference is about which link this Mac dials *out* on; accepting is free, so
+            // accept on all of them and let the connecting side decide.
+            link: .auto)
 
         let listener = LinkListener(identity: identity,
                                     localRole: .client,

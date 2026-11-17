@@ -10,7 +10,8 @@ public final class LinkListener {
         public var handshakeTimeout: TimeInterval
         /// Bind to loopback only. Used by `selftest` so the check never touches the network.
         public var loopbackOnly: Bool
-        /// Which physical link to accept connections on.
+        /// Which links to accept on. Leave as `.auto` unless you have a reason not to:
+        /// restricting it makes this Mac unreachable from one that prefers another link.
         public var link: LinkPreference
 
         public init(port: UInt16, requireLocalNetwork: Bool = true,

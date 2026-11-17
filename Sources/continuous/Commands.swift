@@ -203,6 +203,9 @@ enum Commands {
         let code = PairingCode.generate()
         var store = try SecretStore.load()
 
+        // Replace any pairing that has never been used: two outstanding codes means two
+        // keys and no way to tell which one the other Mac was given.
+        store.pairings.removeAll { !$0.isBound }
         if store.pairings.contains(where: { $0.label == label }) {
             throw ContinuousError.invalidArgument("a pairing labelled '\(label)' already exists — pick another --label or `pair forget` it first")
         }
@@ -236,6 +239,7 @@ enum Commands {
             warn("this code is already stored as '\(existing.label)' — nothing to do")
             return
         }
+        store.pairings.removeAll { !$0.isBound }
         if store.pairings.contains(where: { $0.label == label }) {
             throw ContinuousError.invalidArgument("a pairing labelled '\(label)' already exists — pick another --label")
         }
@@ -254,6 +258,11 @@ enum Commands {
             out(Style.dim("  continuous pair init          on the Mac that lends its screen"))
             out(Style.dim("  continuous pair join <CODE>   on the Mac with the keyboard"))
             return
+        }
+        let pending = store.pairings.filter { !$0.isBound }.count
+        if pending > 0 {
+            info("\(pending) pairing\(pending == 1 ? "" : "s") set up but never used — "
+                 + "they are not paired Macs until a connection succeeds")
         }
         out(Style.bold("  LABEL                 KEY       PEER                  LAST SEEN     ENDPOINT"))
         for p in store.pairings {

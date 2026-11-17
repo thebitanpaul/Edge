@@ -44,7 +44,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func start() {
         menu.delegate = self
         statusItem.menu = menu
-        statusItem.button?.toolTip = "Continuous"
+        // No tooltip. AppKit leaves one floating beside the cursor after the menu has been
+        // opened and closed, and it follows you around until you hover the icon again. The
+        // first line of the menu says the same thing, in a place that behaves.
         lastIconSignature = iconSignature
         redrawIcon()
 
@@ -146,7 +148,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             button.image = nil
             button.title = isRunning ? "◉" : "○"
         }
-        button.toolTip = description
+        _ = description
     }
 
     // MARK: - Menu
@@ -290,15 +292,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             "The two Macs need to share one secret, and none of this affects which Mac shares "
             + "its keyboard — you have just chosen that separately.\n\n"
             + "Pairing over the network is the reliable way: choose it on both Macs, compare "
-            + "the six digits they show, and neither can end up with a different key. A typed "
-            + "code works too, and is there for when the two Macs cannot see each other."
+            + "the six digits they show, and neither can end up with a different key.\n\n"
+            + "With a typed code there is one direction only — the Mac that shares its "
+            + "keyboard shows it, the Mac that lends its screen types it in. This Mac "
+            + (mode == .host ? "shows the code." : "types it in.")
         pairAlert.addButton(withTitle: "Pair over the network")
-        pairAlert.addButton(withTitle: "Use a code instead")
+        pairAlert.addButton(withTitle: mode == .host ? "Show a code" : "Enter a code")
         pairAlert.addButton(withTitle: "Later")
 
         switch pairAlert.runModal() {
         case .alertFirstButtonReturn: pairNearby()
-        case .alertSecondButtonReturn: pairNewMac()
+        case .alertSecondButtonReturn: mode == .host ? pairNewMac() : enterPairingCode()
         default: break
         }
         refresh()
@@ -316,45 +320,62 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: Devices
 
+    /// Lists Macs this one has actually paired with.
+    ///
+    /// Only Macs it has *connected to* appear here. A pairing that has been set up but never
+    /// used is not a device yet — showing it as one is what made both Macs display "Mac 1"
+    /// immediately after generating a code, which reads as success when nothing has happened.
+    /// Unused pairings appear as a single line saying what is being waited for.
     private func devicesMenuItem() -> NSMenuItem {
         let item = NSMenuItem(title: "Devices", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         let store = (try? SecretStore.load()) ?? SecretStore()
+        let paired = store.pairings.filter(\.isBound)
+        let pending = store.pairings.filter { !$0.isBound }
 
-        if store.pairings.isEmpty {
+        if paired.isEmpty {
             submenu.addItem(disabled("No Macs paired yet"))
         } else {
-            for pairing in store.pairings {
+            for pairing in paired {
                 let connected = lastKnownState?.connected == true
                     && lastKnownState?.peerName == pairing.peerName
-                let entry = NSMenuItem(title: displayName(for: pairing), action: nil,
-                                       keyEquivalent: "")
+                let entry = NSMenuItem(title: pairing.peerName ?? pairing.label,
+                                       action: nil, keyEquivalent: "")
                 entry.state = connected ? .on : .off
                 entry.submenu = detailMenu(for: pairing)
                 submenu.addItem(entry)
             }
         }
 
+        if let waiting = pending.first {
+            submenu.addItem(.separator())
+            submenu.addItem(disabled(mode == .host
+                ? "Waiting for the other Mac to use your code"
+                : "Waiting to connect — press Start on both Macs"))
+            let cancel = NSMenuItem(title: "Cancel this pairing", action: #selector(forgetDevice(_:)),
+                                    keyEquivalent: "")
+            cancel.target = self
+            cancel.representedObject = waiting.label
+            submenu.addItem(cancel)
+        }
+
         submenu.addItem(.separator())
         submenu.addItem(action("Pair with a nearby Mac…", #selector(pairNearby)))
-        submenu.addItem(disabled("…choose this on both Macs, no code needed"))
+        submenu.addItem(disabled("…choose this on both Macs, nothing to type"))
+
+        // One direction only. Two Macs each generating a code and each waiting for the other
+        // to type it is a stalemate that looks like a bug, so only the Mac that shares its
+        // keyboard offers to create one.
         submenu.addItem(.separator())
-        submenu.addItem(action("Show a pairing code…", #selector(pairNewMac)))
-        submenu.addItem(action("Enter a pairing code…", #selector(enterPairingCode)))
+        if mode == .host {
+            submenu.addItem(action("Show a pairing code…", #selector(pairNewMac)))
+            submenu.addItem(disabled("…then type it on the Mac that lends its screen"))
+        } else {
+            submenu.addItem(action("Enter the code from the other Mac…", #selector(enterPairingCode)))
+            submenu.addItem(disabled("…shown on the Mac that shares its keyboard"))
+        }
         item.submenu = submenu
         return item
-    }
-
-    /// What to call a pairing in the menu.
-    ///
-    /// Both Macs invent the same local name for a new pairing, so two machines each showed
-    /// "Mac 1" and neither said anything about the other. Until a handshake reveals who is on
-    /// the far end there is genuinely nothing to show, so say that rather than showing a name
-    /// that looks like an answer.
-    private func displayName(for pairing: Pairing) -> String {
-        if let peer = pairing.peerName, !peer.isEmpty { return peer }
-        if !pairing.hasGeneratedLabel { return pairing.label }
-        return "\(pairing.label) — not connected yet"
     }
 
     private func detailMenu(for pairing: Pairing) -> NSMenu {
@@ -588,6 +609,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let code = PairingCode.generate()
         do {
             var store = try SecretStore.load()
+            // Replace any pairing that has never been used. Generating a second code while
+            // the first is still outstanding leaves two keys and no way to tell which one the
+            // other Mac was given.
+            store.pairings.removeAll { !$0.isBound }
             store.pairings.append(Pairing(psk: code.psk, label: Self.freshLabel(in: store)))
             try store.save()
         } catch {
@@ -612,8 +637,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let key = ((try? SecretStore.load()) ?? SecretStore()).pairings.last
             .map { String($0.keyIDHex.prefix(8)) } ?? "?"
         restartForPairingChange()
-        notify("Now the other Mac",
-               "Enter that code there, set it to the opposite role, and press Start on both.\n\n"
+        notify("Now the Mac that lends its screen",
+               "Open its menu, choose Devices ▸ Enter the code from the other Mac, and type "
+               + "this in. Then press Start on both.\n\n"
                + "Both Macs should then show key \(key) under Devices. If they do, the pairing "
                + "matched. Until they actually connect, each shows the other as “not connected "
                + "yet” — neither can know the other's name before they have spoken.")
@@ -640,6 +666,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 notify("Already paired", "This Mac already knows that code.")
                 return
             }
+            store.pairings.removeAll { !$0.isBound }
             store.pairings.append(Pairing(psk: code.psk, label: Self.freshLabel(in: store)))
             try store.save()
             let key = String((store.pairings.last?.keyIDHex ?? "").prefix(8))

@@ -387,3 +387,101 @@ struct NetworkPairingTests {
         _ = TLSConfig.parameters(keys: [PSKEntry(psk: psk)])
     }
 }
+
+@Suite("Pairings that have never been used")
+struct PendingPairingTests {
+    /// Generating a code created a Devices entry straight away, so both Macs showed a paired
+    /// device before anything had happened — and entering a code then added a second. A
+    /// pairing is not a paired Mac until a connection has succeeded.
+    @Test("an unused pairing is not a paired Mac")
+    func unusedIsNotPaired() {
+        let fresh = Pairing(psk: Crypto.randomBytes(32), label: "Mac 1")
+        #expect(!fresh.isBound)
+
+        var connected = fresh
+        connected.peerDeviceID = DeviceID()
+        connected.peerName = "NAV-LT-0416"
+        #expect(connected.isBound)
+    }
+
+    /// Two outstanding codes means two keys, and no way to tell which one the other Mac was
+    /// given — which is how a second "Mac 2" appeared for a single other machine.
+    @Test("a new code replaces an unused one rather than adding to it")
+    func replacesUnused() {
+        var store = SecretStore()
+        store.pairings = [Pairing(psk: Crypto.randomBytes(32), label: "Mac 1")]
+
+        store.pairings.removeAll { !$0.isBound }
+        store.pairings.append(Pairing(psk: Crypto.randomBytes(32), label: "Mac 1"))
+        #expect(store.pairings.count == 1)
+    }
+
+    @Test("a Mac that has connected is never discarded by that rule")
+    func keepsBoundPairings() {
+        var bound = Pairing(psk: Crypto.randomBytes(32), label: "Work Mac")
+        bound.peerDeviceID = DeviceID()
+        bound.peerName = "NAV-LT-0416"
+
+        var store = SecretStore()
+        store.pairings = [bound, Pairing(psk: Crypto.randomBytes(32), label: "Mac 2")]
+        store.pairings.removeAll { !$0.isBound }
+
+        #expect(store.pairings.count == 1)
+        #expect(store.pairings[0].peerName == "NAV-LT-0416")
+    }
+}
+
+@Suite("Link preference")
+struct LinkPreferenceTests {
+    private func peer(addresses: [String], port: UInt16?) -> DiscoveredPeer {
+        DiscoveredPeer(serviceName: "Work Mac", deviceID: DeviceID(), role: "client",
+                       endpoint: .hostPort(host: NWEndpoint.Host("work.local"), port: 52777),
+                       advertisedAddresses: addresses, advertisedPort: port)
+    }
+
+    /// A cable gets a self-assigned address and no route, so it cannot be chosen by interface
+    /// — only by address.
+    @Test("a cable address is recognised and preferred")
+    func prefersCable() {
+        let found = peer(addresses: ["192.168.1.8", "169.254.251.10"], port: 52777)
+        #expect(found.cableAddress == "169.254.251.10")
+
+        for preference in [LinkPreference.cable, .auto] {
+            guard case let .hostPort(host, port)? = found.endpoint(preferring: preference) else {
+                Issue.record("\(preference) did not pick the cable"); continue
+            }
+            #expect("\(host)" == "169.254.251.10")
+            #expect(port.rawValue == 52777)
+        }
+    }
+
+    @Test("wi-fi is not diverted onto the cable")
+    func wifiKeepsItsEndpoint() {
+        let found = peer(addresses: ["192.168.1.8", "169.254.251.10"], port: 52777)
+        #expect(found.endpoint(preferring: .wifi) == found.endpoint)
+    }
+
+    /// Insisting on a cable that is not there should say so rather than quietly using Wi-Fi.
+    @Test("requiring a cable refuses when there is none")
+    func cableRequiredButAbsent() {
+        let found = peer(addresses: ["192.168.1.8"], port: 52777)
+        #expect(found.cableAddress == nil)
+        #expect(found.endpoint(preferring: .cable) == nil)
+        #expect(found.endpoint(preferring: .auto) == found.endpoint)
+    }
+
+    @Test("an advert with no port falls back rather than guessing one")
+    func missingPort() {
+        let found = peer(addresses: ["169.254.251.10"], port: nil)
+        #expect(found.endpoint(preferring: .auto) == found.endpoint)
+    }
+
+    /// Only Wi-Fi can be expressed as an interface requirement; requiring wired would match
+    /// nothing, because the cable's interface is in no path.
+    @Test("only wi-fi maps to an interface requirement")
+    func interfaceMapping() {
+        #expect(LinkPreference.wifi.interfaceType == .wifi)
+        #expect(LinkPreference.cable.interfaceType == nil)
+        #expect(LinkPreference.auto.interfaceType == nil)
+    }
+}
