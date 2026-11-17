@@ -117,10 +117,18 @@ public struct SecretStore: Codable, Sendable {
 
     // MARK: persistence
 
-    /// When the pairings on disk last changed, so a running session can notice.
-    public static var lastChanged: Date? {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: Paths.secretsFile.path)
-        return attributes?[.modificationDate] as? Date
+    /// Identifies the *set of keys* currently on disk, and nothing else about the file.
+    ///
+    /// A modification date would be wrong here, and wrong in a way that is hard to see: a
+    /// successful connection writes to this file — it records which Mac the pairing bound to
+    /// and when it was last seen — so every connection looks like a re-pairing. A listener
+    /// watching the date tore itself down a moment after every link came up.
+    public static var keySetFingerprint: String {
+        guard let store = try? load() else { return "none" }
+        return store.pairings
+            .map(\.keyIDHex)
+            .sorted()
+            .joined(separator: ",")
     }
 
     public static func load() throws -> SecretStore {

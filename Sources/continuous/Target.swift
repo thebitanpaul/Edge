@@ -108,10 +108,22 @@ enum Target {
                                           boundTo: pairing.peerDeviceID,
                                           excluding: localDeviceID,
                                           attempt: attempt) {
-            let how = pairing.peerDeviceID == nil
-                ? "Bonjour, \"\(hit.serviceName)\""
-                : "Bonjour, matched on device id"
-            return (hit.endpoint, how)
+            guard let endpoint = hit.endpoint(preferring: config.link) else {
+                throw ContinuousError.invalidArgument(
+                    "'\(pairing.label)' is on the network, but not over a cable.\n"
+                    + "  Connect a USB-C or Thunderbolt cable between the two Macs, or allow\n"
+                    + "  any link:  menu bar ▸ Connect over ▸ Whichever connects, or\n"
+                    + "      continuous config set preferredLink auto")
+            }
+            let how: String
+            if let cable = hit.cableAddress, config.link.prefersCable {
+                how = "cable, \(cable)"
+            } else if pairing.peerDeviceID == nil {
+                how = "Bonjour, \"\(hit.serviceName)\""
+            } else {
+                how = "Bonjour, matched on device id"
+            }
+            return (endpoint, how)
         }
         if seen.isEmpty {
             Log.debug("nothing advertising — Bonjour is blocked on many managed networks")

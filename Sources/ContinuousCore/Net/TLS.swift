@@ -27,13 +27,21 @@ public enum LinkPreference: String, CaseIterable, Sendable {
 
     /// A Thunderbolt or USB-C link between two Macs presents as a wired Ethernet interface,
     /// which is why `cable` maps to `.wiredEthernet` rather than anything USB-shaped.
+    /// Only Wi-Fi can be expressed as an interface requirement.
+    ///
+    /// A Thunderbolt or USB-C link between two Macs carries a self-assigned address and no
+    /// route, so Network.framework does not list its interface in any path — requiring
+    /// `.wiredEthernet` matches nothing and the connection waits for ever. Choosing the cable
+    /// is done by picking its address instead; see `NetworkAddress.isLinkLocalIPv4`.
     var interfaceType: NWInterface.InterfaceType? {
-        switch self {
-        case .auto: return nil
-        case .cable: return .wiredEthernet
-        case .wifi: return .wifi
-        }
+        self == .wifi ? .wifi : nil
     }
+
+    /// Should an address on a direct cable be preferred over a routed one?
+    public var prefersCable: Bool { self == .cable || self == .auto }
+
+    /// Is a cable the only acceptable link?
+    public var requiresCable: Bool { self == .cable }
 }
 
 public enum TLSConfig {
@@ -267,6 +275,32 @@ public enum NetworkAddress {
         if bytes.count == 4 { return bytes[0] == 127 }
         if bytes.count == 16 { return bytes == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] }
         return false
+    }
+
+    /// Every IPv4 address this Mac answers on, loopback excluded.
+    public static func localAddresses() -> [String] {
+        var out: [String] = []
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return out }
+        defer { freeifaddrs(head) }
+
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let cur = cursor {
+            defer { cursor = cur.pointee.ifa_next }
+            let flags = Int32(cur.pointee.ifa_flags)
+            guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0 else { continue }
+            guard let sa = cur.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count),
+                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            out.append(String(cString: host))
+        }
+        return out
+    }
+
+    /// A direct cable between two Macs gets a self-assigned 169.254 address and no router.
+    public static func isLinkLocalIPv4(_ address: String) -> Bool {
+        address.hasPrefix("169.254.")
     }
 
     public static func describe(_ endpoint: NWEndpoint?) -> String {

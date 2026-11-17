@@ -933,10 +933,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let alert = NSAlert()
             alert.messageText = "Already running"
             alert.informativeText =
-                "Another Continuous session is already doing this on this Mac (pid \(other.pid)) "
-                + "— probably one started from a terminal, or a login item.\n\n"
-                + "Two at once means two event taps and doubled traffic, which feels like a "
-                + "laggy pointer and a cursor that will not stay hidden."
+                "A Continuous session is already running on this Mac (pid \(other.pid), "
+                + "\(other.role.rawValue)) — probably started from a terminal, or a login item."
+                + "\n\nOne Mac runs one session. Two means two event taps and doubled traffic, "
+                + "which feels like a laggy pointer and a cursor that will not stay hidden."
             alert.addButton(withTitle: "Take over")
             alert.addButton(withTitle: "Leave it")
             guard alert.runModal() == .alertFirstButtonReturn else { return }

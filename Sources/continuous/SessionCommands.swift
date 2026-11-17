@@ -10,12 +10,12 @@ import ContinuousCore
 /// mistyped pairing code — the one explanation it is not — and no amount of re-pairing fixes
 /// it, because the problem is on the side that is not being re-paired.
 final class PairingWatcher {
-    private var lastSeen: Date?
+    private var lastSeen: String
     private let onChange: () -> Void
     private var timer: DispatchSourceTimer?
 
     init(onChange: @escaping () -> Void) {
-        self.lastSeen = SecretStore.lastChanged
+        self.lastSeen = SecretStore.keySetFingerprint
         self.onChange = onChange
     }
 
@@ -24,7 +24,7 @@ final class PairingWatcher {
         timer.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(500))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            let current = SecretStore.lastChanged
+            let current = SecretStore.keySetFingerprint
             guard current != self.lastSeen else { return }
             self.lastSeen = current
             DispatchQueue.main.async { self.onChange() }
@@ -471,19 +471,20 @@ extension Commands {
 
     /// Refuses to start when this Mac is already running a session of the same kind.
     static func refuseIfAlreadyRunning(_ role: RuntimeState.Role, replace: Bool) throws {
-        guard let other = RuntimeState.existing(role) else { return }
+        // Any session, not just one of the same kind: one Mac runs one session.
+        guard let other = RuntimeState.anyLive else { return }
 
         if replace {
             info("stopping the session already running as pid \(other.pid)")
             kill(other.pid, SIGINT)
             // Give it time to put the pointer back and un-hide the cursor on its way out.
-            _ = Runtime.wait(until: { RuntimeState.existing(role) == nil }, timeout: 4)
-            if RuntimeState.existing(role) != nil { kill(other.pid, SIGKILL) }
+            _ = Runtime.wait(until: { RuntimeState.anyLive == nil }, timeout: 4)
+            if RuntimeState.anyLive != nil { kill(other.pid, SIGKILL) }
             return
         }
 
-        let what = role == .sharing ? "sharing this Mac's keyboard and mouse"
-                                    : "lending this Mac's screen"
+        let what = other.role == .sharing ? "sharing this Mac's keyboard and mouse"
+                                          : "lending this Mac's screen"
         throw ContinuousError.invalidArgument(
             "another Continuous session is already \(what) (pid \(other.pid)).\n"
             + "  Two at once means two event taps and doubled traffic, which shows up as a\n"

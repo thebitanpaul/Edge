@@ -82,6 +82,16 @@ public struct RuntimeState: Codable, Sendable {
         return state
     }
 
+    /// Any live session on this Mac, of either kind.
+    ///
+    /// One Mac runs one session. Two of *any* combination means two event taps and two sets
+    /// of forwarded events; a sharing session alongside a listening one additionally has this
+    /// Mac injecting into its own tap. None of it is a configuration anyone wants, and all of
+    /// it presents as mysterious lag rather than as "there are two".
+    public static var anyLive: RuntimeState? {
+        [Role.sharing, .listening].lazy.compactMap { existing($0) }.first
+    }
+
     public static var all: [RuntimeState] {
         [Role.sharing, .listening].compactMap { load($0) }
     }

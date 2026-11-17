@@ -86,6 +86,13 @@ public final class LinkListener {
             txt["id"] = identity.deviceID.compact
             txt["v"] = String(Wire.protocolVersion)
             txt["role"] = localRole.description
+            // Our own addresses, so the other Mac can pick the one it wants rather than
+            // taking whatever Bonjour resolution happens to try first. This is how a cable
+            // gets used: a Thunderbolt link carries only a link-local address and no route,
+            // so Network.framework does not list its interface at all and cannot be asked
+            // to prefer it — but it will happily connect to the address.
+            txt["addrs"] = NetworkAddress.localAddresses().joined(separator: ",")
+            txt["port"] = String(self.listener?.port?.rawValue ?? options.port)
             listener.service = NWListener.Service(name: name,
                                                   type: Self.bonjourServiceType,
                                                   txtRecord: txt.data)
@@ -96,6 +103,7 @@ public final class LinkListener {
             switch state {
             case .ready:
                 let bound = self.listener?.port?.rawValue ?? self.options.port
+                self.republishService(port: bound)
                 self.onListening?(bound)
             case .failed(let error):
                 Log.error("listener failed: \(error)")
@@ -111,6 +119,19 @@ public final class LinkListener {
 
         self.listener = listener
         listener.start(queue: queue)
+    }
+
+    /// Re-advertises once the real port is known, so the TXT record can carry it.
+    private func republishService(port: UInt16) {
+        guard let name = options.bonjourName, let listener else { return }
+        var txt = NWTXTRecord()
+        txt["id"] = identity.deviceID.compact
+        txt["v"] = String(Wire.protocolVersion)
+        txt["role"] = localRole.description
+        txt["addrs"] = NetworkAddress.localAddresses().joined(separator: ",")
+        txt["port"] = String(port)
+        listener.service = NWListener.Service(name: name, type: Self.bonjourServiceType,
+                                              txtRecord: txt.data)
     }
 
     public func stop() {

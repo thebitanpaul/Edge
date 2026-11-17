@@ -6,6 +6,28 @@ public struct DiscoveredPeer: Sendable, Hashable {
     public var deviceID: DeviceID?
     public var role: String?
     public var endpoint: NWEndpoint
+    /// Addresses the Mac advertised for itself, and the port it is listening on.
+    public var advertisedAddresses: [String] = []
+    public var advertisedPort: UInt16?
+
+    /// The address of a direct cable, if one was advertised.
+    public var cableAddress: String? {
+        advertisedAddresses.first(where: NetworkAddress.isLinkLocalIPv4)
+    }
+
+    /// Where to dial, for the kind of link wanted. `nil` means "nothing suitable".
+    ///
+    /// Picking an address rather than an interface is not a preference, it is a necessity:
+    /// a cable between two Macs has no route, so Network.framework never lists its interface
+    /// and cannot be asked to prefer it. The address, however, works perfectly.
+    public func endpoint(preferring link: LinkPreference) -> NWEndpoint? {
+        if let cable = cableAddress, link.prefersCable, let port = advertisedPort,
+           let nwPort = NWEndpoint.Port(rawValue: port) {
+            return .hostPort(host: NWEndpoint.Host(cable), port: nwPort)
+        }
+        if link.requiresCable { return nil }
+        return endpoint
+    }
 
     public var displayName: String {
         if let deviceID { return "\(serviceName)  [\(deviceID.short)]" }
@@ -80,8 +102,16 @@ public final class Discovery {
                     if let raw = txt["id"] { deviceID = DeviceID(string: raw) }
                     role = txt["role"]
                 }
+                var addresses: [String] = []
+                var advertisedPort: UInt16?
+                if case let .bonjour(txt) = result.metadata {
+                    addresses = (txt["addrs"] ?? "").split(separator: ",").map(String.init)
+                    advertisedPort = (txt["port"]).flatMap { UInt16($0) }
+                }
                 return DiscoveredPeer(serviceName: name, deviceID: deviceID,
-                                      role: role, endpoint: result.endpoint)
+                                      role: role, endpoint: result.endpoint,
+                                      advertisedAddresses: addresses,
+                                      advertisedPort: advertisedPort)
             }
             Log.debug("browse(\(self.serviceType)): \(peers.count) result(s) — "
                       + peers.map { "\($0.serviceName)[\($0.deviceID?.short ?? "no id")]" }

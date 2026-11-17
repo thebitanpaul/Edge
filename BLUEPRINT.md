@@ -381,6 +381,38 @@ on several paths, exposed because this one could not work around it.
 it holds a handle to — after a relaunch or a takeover that handle is nil while the session is
 very much still running, and Stop silently did nothing.
 
+#### A fix that broke the thing it was meant to protect
+
+The listener reloading its keys — added so a session running when you paired would accept the
+new key — watched the pairings file's modification date. But a *successful connection writes to
+that file*: it records which Mac the pairing bound to and when it was last seen. So every link
+that came up looked like a re-pairing, and the listener tore itself down a moment later. The
+symptom was 32 of 33 heartbeats lost with pointer events still flowing, and an icon on the
+receiving Mac that blinked for ever.
+
+It now compares the set of key identifiers rather than the file's timestamp. Nought spurious
+restarts, nought heartbeats lost.
+
+Worth naming the shape of the mistake: a watcher that asks "did this file change?" when the
+question is "did the keys change?". The file changes for reasons that have nothing to do with
+the thing being watched, and one of those reasons was the very event the watcher was supposed
+to survive.
+
+#### Choosing a cable means choosing an address, not an interface
+
+`preferredLink = cable` set `requiredInterfaceType = .wiredEthernet` and never connected. A
+Thunderbolt or USB-C link between two Macs carries a self-assigned `169.254` address and no
+route, so `NWPathMonitor` does not list its interface in any path at all — the requirement
+matches nothing and the connection waits for ever.
+
+The addresses work perfectly; only the interface is invisible. So each Mac advertises its own
+addresses in its Bonjour record, and the other picks the `169.254` one when a cable is wanted.
+Measured on the two Macs this was built for: **1.2 ms mean over the cable against 236 ms over
+Wi-Fi**, which is the difference between a pointer that feels attached to your hand and one
+that does not.
+
+Because of that gap, `auto` prefers a cable when one is advertised.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 
