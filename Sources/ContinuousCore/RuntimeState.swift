@@ -70,6 +70,18 @@ public struct RuntimeState: Codable, Sendable {
         try? FileManager.default.removeItem(at: url(for: role))
     }
 
+    /// Another live session of the same kind on this Mac, if there is one.
+    ///
+    /// Two sessions means two event taps, two sets of forwarded events and two processes
+    /// taking turns hiding and showing the cursor. The symptoms -- a laggy pointer on the
+    /// other Mac, a cursor here that takes seconds to go away -- look like bugs in the
+    /// session rather than like there being two of it, so it is worth refusing outright.
+    public static func existing(_ role: Role) -> RuntimeState? {
+        guard let state = load(role), state.isLive,
+              state.pid != ProcessInfo.processInfo.processIdentifier else { return nil }
+        return state
+    }
+
     public static var all: [RuntimeState] {
         [Role.sharing, .listening].compactMap { load($0) }
     }

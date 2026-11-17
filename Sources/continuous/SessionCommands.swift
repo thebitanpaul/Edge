@@ -16,6 +16,7 @@ extension Commands {
         let directory = try PairingDirectory.load()
         directory.allowRebind = args.bool("rebind")
         guard !directory.snapshot.pairings.isEmpty else { throw ContinuousError.notPaired }
+        try refuseIfAlreadyRunning(.listening, replace: args.bool("replace"))
 
         // Injecting events into other apps needs Accessibility, and there is nothing useful
         // this command can do without it, so say so up front rather than failing silently
@@ -149,6 +150,7 @@ extension Commands {
         let directory = try PairingDirectory.load()
         let shareInput = !args.bool("link-only")
         let retry = !args.bool("no-retry")
+        try refuseIfAlreadyRunning(.sharing, replace: args.bool("replace"))
 
         // Built once and kept across reconnections. The event tap stays installed while the
         // link is down, which is safe by construction: with no link it swallows nothing.
@@ -388,6 +390,28 @@ extension Commands {
             return .ended
         }
         return .dropped(closed.value.error)
+    }
+
+    /// Refuses to start when this Mac is already running a session of the same kind.
+    static func refuseIfAlreadyRunning(_ role: RuntimeState.Role, replace: Bool) throws {
+        guard let other = RuntimeState.existing(role) else { return }
+
+        if replace {
+            info("stopping the session already running as pid \(other.pid)")
+            kill(other.pid, SIGINT)
+            // Give it time to put the pointer back and un-hide the cursor on its way out.
+            _ = Runtime.wait(until: { RuntimeState.existing(role) == nil }, timeout: 4)
+            if RuntimeState.existing(role) != nil { kill(other.pid, SIGKILL) }
+            return
+        }
+
+        let what = role == .sharing ? "sharing this Mac's keyboard and mouse"
+                                    : "lending this Mac's screen"
+        throw ContinuousError.invalidArgument(
+            "another Continuous session is already \(what) (pid \(other.pid)).\n"
+            + "  Two at once means two event taps and doubled traffic, which shows up as a\n"
+            + "  laggy pointer and a cursor that will not stay hidden.\n"
+            + "  Stop that one first, quit the menu-bar app, or pass --replace.")
     }
 
     // MARK: - shared reporting

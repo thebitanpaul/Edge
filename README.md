@@ -96,12 +96,21 @@ no Dock icon, no window.
   Quit Continuous
 ```
 
-Pairing, forgetting a Mac and changing the arrangement are all in the menu, so the terminal is
-optional rather than required. Changing the arrangement or the clipboard setting restarts the
+The icon blinks while it is looking for the other Mac, and settles once connected. Pairing,
+forgetting a Mac and changing the arrangement are all in the menu, so the terminal is optional
+rather than required. Changing the arrangement or the clipboard setting restarts the
 session, because both are read when one starts.
 
-Pick **Mode** on each Mac — one shares its keyboard and mouse, the other lends its screen —
-and press **Start**. Everything below still works from the terminal; the menu runs the same
+First time, choose **Set up…**. It asks the two questions in order and explains both:
+
+1. **What should this Mac do?** One Mac shares its keyboard and mouse; the other lends its
+   screen. *Set the other Mac to the opposite* — if both pick the same, neither dials and
+   nothing connects.
+2. **Pair them.** One secret code, shared between the two. It does not matter which Mac
+   creates it, and it has no bearing on which Mac shares its keyboard — that is the separate
+   choice you just made.
+
+Then press **Start** on both. Everything below still works from the terminal; the menu runs the same
 session as a child process, so the two are never out of step.
 
 ## Use it from the terminal
@@ -286,6 +295,16 @@ continuous status                      # what is running right now
 This installs a user LaunchAgent — it runs as you, in your login session, with your
 permissions and no root anywhere. A keyboard forwarder running as root is exactly what this
 project exists to avoid installing.
+
+## Only one session at a time
+
+A second session on the same Mac means two event taps, two sets of forwarded events and two
+processes taking turns hiding the cursor. It feels like a laggy pointer and a cursor that will
+not stay hidden, which looks like a bug rather than like there being two of it — so starting a
+second one is refused. `continuous status` says what is already running; `--replace` takes over.
+
+The menu bar offers to take over a session it did not start, such as one left running in a
+terminal.
 
 ## Clipboard sharing
 

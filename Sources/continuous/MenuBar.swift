@@ -30,6 +30,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var mode: Mode
     private var lastKnownState: RuntimeState?
     private var lastIconSignature = ""
+    private var blinkTimer: Timer?
+    private var blinkOn = true
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
 
@@ -74,19 +76,45 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 state?.pointerIsRemote == true ? "away" : "here"].joined(separator: "/")
     }
 
+    private var pointerIsAway: Bool { lastKnownState?.pointerIsRemote == true }
+
+    /// Running but not yet connected — the state worth animating.
+    private var isSearching: Bool { isRunning && lastKnownState?.connected != true }
+
     private func refresh() {
         lastKnownState = currentState
+        updateBlinking()
 
         // Only redraw when it would differ. Touching an NSStatusItem button makes AppKit
-        // reconsider the cursor, and doing that twice a second un-hides the cursor the
-        // session is holding hidden while the pointer is on the other Mac — which is how the
-        // menu-bar front end ended up leaving a visible pointer behind and the terminal did not.
+        // reconsider the cursor, and doing that twice a second un-hid the cursor the session
+        // was holding hidden — which is how the menu-bar front end left a visible pointer
+        // behind on a screen nobody was using, and the terminal did not.
         let signature = iconSignature
         if signature != lastIconSignature {
             lastIconSignature = signature
             redrawIcon()
         }
         // The menu is rebuilt when it opens; rebuilding it while closed is invisible work.
+    }
+
+    /// Blinks while searching for the other Mac, and only then.
+    ///
+    /// Never while the pointer is away: each blink touches the status button, and that is
+    /// exactly what un-hides the cursor on this Mac.
+    private func updateBlinking() {
+        let shouldBlink = isSearching && !pointerIsAway
+        if shouldBlink, blinkTimer == nil {
+            blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                self.blinkOn.toggle()
+                self.statusItem.button?.alphaValue = self.blinkOn ? 1.0 : 0.35
+            }
+        } else if !shouldBlink, blinkTimer != nil {
+            blinkTimer?.invalidate()
+            blinkTimer = nil
+            blinkOn = true
+            statusItem.button?.alphaValue = 1.0
+        }
     }
 
     private func redrawIcon() {
@@ -133,8 +161,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let state = lastKnownState
 
         // What is happening, in the first two lines, without having to read a log.
+        let paired = !(((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty)
+
+        if !paired {
+            menu.addItem(disabled("Not set up yet"))
+            menu.addItem(action("Set up…", #selector(runSetup)))
+            menu.addItem(.separator())
+            menu.addItem(action("Quit Continuous", #selector(quit)))
+            return
+        }
+
         if !isRunning {
             menu.addItem(disabled("Not running"))
+            menu.addItem(disabled("This Mac: \(mode.title.lowercased())"))
         } else if let state, state.connected {
             menu.addItem(disabled("Connected to \(state.peerName ?? "the other Mac")"))
             if mode == .host {
@@ -147,15 +186,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if state.clipboardActive { detail.append("clipboard shared") }
             if !detail.isEmpty { menu.addItem(disabled(detail.joined(separator: " · "))) }
         } else {
-            menu.addItem(disabled(mode == .host ? "Looking for the other Mac…" : "Waiting for the other Mac…"))
+            menu.addItem(disabled(mode == .host ? "Looking for the other Mac…"
+                                                : "Waiting for the other Mac…"))
+            menu.addItem(disabled(waitingHint))
             if let error = state?.lastError { menu.addItem(disabled(error)) }
         }
 
         menu.addItem(.separator())
         menu.addItem(action(isRunning ? "Stop" : "Start", #selector(toggleRunning)))
 
-        let modeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
+        let modeItem = NSMenuItem(title: "This Mac", action: nil, keyEquivalent: "")
         let modeMenu = NSMenu()
+        modeMenu.addItem(disabled("The other Mac must be set to the opposite"))
         for candidate in [Mode.host, .client] {
             let item = NSMenuItem(title: candidate.title, action: #selector(selectMode(_:)),
                                   keyEquivalent: "")
@@ -168,6 +210,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(modeItem)
 
         menu.addItem(.separator())
+        menu.addItem(action("Set up…", #selector(runSetup)))
         menu.addItem(devicesMenuItem())
         menu.addItem(arrangementMenuItem())
         menu.addItem(.separator())
@@ -186,6 +229,70 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(disabled(Runtime.version))
         menu.addItem(.separator())
         menu.addItem(action("Quit Continuous", #selector(quit)))
+    }
+
+    // MARK: Setup
+
+    /// One place that explains the two decisions and makes both of them, in order.
+    ///
+    /// They were previously separate menu items with nothing tying them together, and the
+    /// result was a reasonable question with no answer in the interface: does it matter which
+    /// Mac shows the pairing code, and does that decide which one shares its keyboard? (No,
+    /// and no.) Pairing is symmetric; the role is a separate choice; and if both Macs pick the
+    /// same role nothing connects and nothing says why.
+    @objc private func runSetup() {
+        let roleAlert = NSAlert()
+        roleAlert.messageText = "What should this Mac do?"
+        roleAlert.informativeText =
+            "Continuous needs one Mac of each kind.\n\n"
+            + "Share its keyboard & mouse — you use this Mac's keyboard, and the pointer "
+            + "crosses onto the other screen.\n\n"
+            + "Lend its screen — this Mac is driven by the other one's keyboard.\n\n"
+            + "Set the other Mac to the opposite. If both are set the same, neither will "
+            + "connect."
+        roleAlert.addButton(withTitle: "Share its keyboard & mouse")
+        roleAlert.addButton(withTitle: "Lend its screen")
+        roleAlert.addButton(withTitle: "Cancel")
+
+        let answer = roleAlert.runModal()
+        guard answer != .alertThirdButtonReturn else { return }
+        setMode(answer == .alertFirstButtonReturn ? .host : .client, restart: false)
+
+        let store = (try? SecretStore.load()) ?? SecretStore()
+        if !store.pairings.isEmpty {
+            notify("Set to: \(mode.title)",
+                   "This Mac is already paired. Press Start here and on the other Mac.")
+            refresh()
+            return
+        }
+
+        let pairAlert = NSAlert()
+        pairAlert.messageText = "Pair the two Macs"
+        pairAlert.informativeText =
+            "The two Macs share one secret code. It does not matter which one creates it, and "
+            + "it has no bearing on which Mac shares its keyboard — you have just chosen that "
+            + "separately.\n\n"
+            + "Create the code on whichever Mac you are sitting at, then type it on the other."
+        pairAlert.addButton(withTitle: "Create a code")
+        pairAlert.addButton(withTitle: "I have a code")
+        pairAlert.addButton(withTitle: "Later")
+
+        switch pairAlert.runModal() {
+        case .alertFirstButtonReturn: pairNewMac()
+        case .alertSecondButtonReturn: enterPairingCode()
+        default: break
+        }
+        refresh()
+    }
+
+    /// A short line naming the likeliest reason nothing has connected yet.
+    ///
+    /// The commonest by far is both Macs set to the same role, and because neither one dials
+    /// in that case there is nothing in any log to notice.
+    private var waitingHint: String {
+        mode == .host
+            ? "Make sure the other Mac is set to “Lend my screen”"
+            : "Make sure the other Mac is set to “Share my keyboard & mouse”"
     }
 
     // MARK: Devices
@@ -234,7 +341,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let code = PairingCode.generate()
         do {
             var store = try SecretStore.load()
-            store.pairings.append(Pairing(psk: code.psk, label: "Mac \(store.pairings.count + 1)"))
+            store.pairings.append(Pairing(psk: code.psk, label: Self.freshLabel(in: store)))
             try store.save()
         } catch {
             notify("Could not create a pairing", error.localizedDescription)
@@ -278,13 +385,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 notify("Already paired", "This Mac already knows that code.")
                 return
             }
-            store.pairings.append(Pairing(psk: code.psk, label: "Mac \(store.pairings.count + 1)"))
+            store.pairings.append(Pairing(psk: code.psk, label: Self.freshLabel(in: store)))
             try store.save()
-            notify("Paired", "Press Start on both Macs. This one is set to: \(mode.title).")
+            notify("Paired",
+                   "Press Start on both Macs. This one is set to: \(mode.title). "
+                   + "The other must be set to the opposite.")
         } catch {
             notify("That code was not accepted", error.localizedDescription)
         }
         refresh()
+    }
+
+    /// A label nothing else is using. Counting the pairings is not enough: forget the first
+    /// of two and the count gives back a name that is already taken, and a duplicate label
+    /// cannot be told apart when choosing which pairing to dial with.
+    private static func freshLabel(in store: SecretStore) -> String {
+        let taken = Set(store.pairings.map(\.label))
+        var n = 1
+        while taken.contains("Mac \(n)") { n += 1 }
+        return "Mac \(n)"
     }
 
     @objc private func forgetDevice(_ sender: NSMenuItem) {
@@ -427,12 +546,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func selectMode(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
-              let chosen = Mode(rawValue: raw), chosen != mode else { return }
+              let chosen = Mode(rawValue: raw) else { return }
+        setMode(chosen, restart: true)
+    }
+
+    private func setMode(_ chosen: Mode, restart: Bool) {
+        guard chosen != mode else { return }
         let wasRunning = isRunning
         stopSession()
         mode = chosen
         UserDefaults.standard.set(chosen.rawValue, forKey: "mode")
-        if wasRunning { startSession() }
+        if restart && wasRunning { startSession() }
         refresh()
     }
 
@@ -476,6 +600,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func quit() {
+        blinkTimer?.invalidate()
         stopSession()
         NSApp.terminate(nil)
     }
@@ -499,6 +624,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         log.seekToEndOfFile()
         log.write(Data("\n--- \(Date()) · starting \(mode.argument) ---\n".utf8))
+
+        if let other = RuntimeState.existing(mode.runtimeRole) {
+            let alert = NSAlert()
+            alert.messageText = "Already running"
+            alert.informativeText =
+                "Another Continuous session is already doing this on this Mac (pid \(other.pid)) "
+                + "— probably one started from a terminal, or a login item.\n\n"
+                + "Two at once means two event taps and doubled traffic, which feels like a "
+                + "laggy pointer and a cursor that will not stay hidden."
+            alert.addButton(withTitle: "Take over")
+            alert.addButton(withTitle: "Leave it")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            kill(other.pid, SIGINT)
+            let deadline = Date().addingTimeInterval(4)
+            while RuntimeState.existing(mode.runtimeRole) != nil && Date() < deadline {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+            }
+        }
 
         let process = Process()
         process.executableURL = executable
