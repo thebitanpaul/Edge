@@ -20,10 +20,10 @@ only to the other Mac, and the code that holds those permissions is in this repo
           no cloud · no account · no third-party server
 ```
 
-**Status: milestone 3 of 5 — it works.** Push the pointer off the edge of one Mac and it
-appears on the other, with the keyboard following it. What remains is polish: reconnecting by
-itself, starting at login, input-method handling, and an optional clipboard. See
-[BLUEPRINT.md](BLUEPRINT.md) for the plan and [docs/SECURITY.md](docs/SECURITY.md) for the
+**Status: milestone 4 of 5.** Push the pointer off the edge of one Mac and it appears on the
+other, with the keyboard following it. It reconnects on its own and can start at login. What
+remains is optional comfort: clipboard sync, a menu-bar indicator, dead keys and input methods.
+See [BLUEPRINT.md](BLUEPRINT.md) for the plan and [docs/SECURITY.md](docs/SECURITY.md) for the
 security model.
 
 ---
@@ -161,10 +161,17 @@ blocks peer-to-peer traffic.
 | `continuous inject-test` | move this Mac's own pointer, to check Accessibility |
 | `continuous remote-test` | drive the **other** Mac's pointer across the link |
 | `continuous permissions` | what is granted, and how to grant the rest |
+| `continuous capture-test` | can this Mac capture input? |
+| `continuous status` | what is running, and which Mac has the pointer |
+| `continuous service install <ROLE>` | start at login as `listen` or `connect` |
+| `continuous service start` / `stop` / `uninstall` | control the login item |
 | `continuous config show` / `set` | settings |
 
 Useful options: `--port`, `--pair <label>` (when you have more than one pairing),
-`--duration <seconds>`, `--no-bonjour`, `--keys`, `--log debug`.
+`--duration <seconds>`, `--no-bonjour`, `--keys`, `--link-only`, `--no-retry`, `--log debug`.
+
+A dropped link reconnects on its own, backing off from one second up to twenty. `--no-retry`
+turns that off.
 
 `connect` takes a pairing label, a device id, a Bonjour name, or an address — and with a single
 pairing it takes nothing at all. It looks for the Mac that pairing is pinned to, and falls back
@@ -188,8 +195,35 @@ continuous capture-test       # can this Mac capture input?
 continuous inject-test        # can this Mac be driven?
 ```
 
-A rebuild changes the ad-hoc signature, so macOS may treat it as a new app and ask again. If a
-permission is ticked but clearly not in force, untick and re-tick it.
+### Granting them once instead of after every rebuild
+
+macOS keys these permissions to an app's *code identity*. With an ad-hoc signature that
+identity is a hash of the app's contents, so every rebuild looks like a brand new app and you
+have to grant both permissions again. One command fixes that for good:
+
+```bash
+Scripts/create-signing-identity.sh
+```
+
+It creates a self-signed code-signing certificate in your login keychain, trusted by nothing
+but your own Mac. `Scripts/build.sh` picks it up automatically and the app then keeps one
+identity across rebuilds. You will be asked for the two permissions once more — because the
+identity has just changed — and not again. Remove it any time with
+`security delete-certificate -c "Continuous Local Signing"`.
+
+If a permission is ticked but clearly not in force, untick and re-tick it.
+
+## Starting at login
+
+```bash
+continuous service install listen      # on the Mac lending its screen
+continuous service install connect     # on the Mac with the keyboard
+continuous status                      # what is running right now
+```
+
+This installs a user LaunchAgent — it runs as you, in your login session, with your
+permissions and no root anywhere. A keyboard forwarder running as root is exactly what this
+project exists to avoid installing.
 
 ## Where state lives
 
@@ -230,4 +264,6 @@ fails with `plugin for module 'TestingMacros' not found`; the script passes the 
 
 ## Licence
 
-Do what you like with it.
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Copyright (c) 2026 Bitan Paul, phiUture. All Rights Reserved.

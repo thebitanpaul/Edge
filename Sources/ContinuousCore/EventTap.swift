@@ -3,11 +3,20 @@ import CoreGraphics
 
 /// A `CGEventTap` on the Mac whose keyboard and mouse are being shared.
 ///
-/// The tap is inserted at the head of the session tap chain in *active* mode, which means the
-/// handler may return `nil` to swallow an event entirely. That is the whole trick: while the
-/// pointer is on the other Mac, every key and every movement is consumed here and forwarded,
-/// so this Mac sees nothing and the other one behaves as though the keyboard were plugged
-/// into it.
+/// The tap is inserted at the head of the chain in *active* mode, which means the handler may
+/// return `nil` to swallow an event entirely. That is the whole trick: while the pointer is on
+/// the other Mac, every key and every movement is consumed here and forwarded, so this Mac
+/// sees nothing and the other one behaves as though the keyboard were plugged into it.
+///
+/// ## Why the HID level and not the session level
+///
+/// `.cgSessionEventTap` is too late. By the time an event reaches it the window server has
+/// *already* moved the pointer, so swallowing it stops applications reacting but leaves the
+/// cursor sliding around the screen — two pointers moving at once, one on each Mac.
+///
+/// `.cghidEventTap` is the point where events enter the window server. Deleting a movement
+/// there means the local cursor never moves in the first place, which is the only way to get
+/// this right. It is also what every other tool in this category does.
 ///
 /// Swallowing input is also the dangerous part. A tap that keeps consuming after the link has
 /// gone would leave this Mac with no keyboard and no pointer, so every path that can fail has
@@ -52,6 +61,10 @@ public final class EventTap {
         return types.reduce(CGEventMask(0)) { $0 | (1 << CGEventMask($1.rawValue)) }
     }
 
+    /// Where the tap was actually installed. `.cgSessionEventTap` means the HID level was
+    /// refused and the caller needs to compensate — see `LocalPointer.detachFromHardware`.
+    public private(set) var location: CGEventTapLocation = .cghidEventTap
+
     public func start(mask: CGEventMask? = nil) throws {
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
@@ -73,18 +86,34 @@ public final class EventTap {
             return Unmanaged.passUnretained(result)
         }
 
-        guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap,
-                                           place: .headInsertEventTap,
-                                           options: .defaultTap,
-                                           eventsOfInterest: mask ?? Self.defaultMask,
-                                           callback: callback,
-                                           userInfo: refcon) else {
+        func create(at location: CGEventTapLocation) -> CFMachPort? {
+            CGEvent.tapCreate(tap: location,
+                              place: .headInsertEventTap,
+                              options: .defaultTap,
+                              eventsOfInterest: mask ?? Self.defaultMask,
+                              callback: callback,
+                              userInfo: refcon)
+        }
+
+        var chosen = CGEventTapLocation.cghidEventTap
+        var created = create(at: chosen)
+        if created == nil {
+            // Some managed configurations refuse a HID-level tap. The session level still
+            // works for forwarding; the caller then has to stop the local cursor by other
+            // means, which is why the location is exposed.
+            Log.warn("could not tap at the HID level; falling back to the session level — the local cursor will need to be detached separately")
+            chosen = .cgSessionEventTap
+            created = create(at: chosen)
+        }
+
+        guard let port = created else {
             // tapCreate returns nil for a missing permission as well as for bad arguments;
             // the permission is overwhelmingly the likely cause.
             throw Permissions.inputMonitoring().isGranted && Permissions.accessibility().isGranted
                 ? StartFailure.couldNotCreate
                 : StartFailure.notPermitted
         }
+        self.location = chosen
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
@@ -92,7 +121,7 @@ public final class EventTap {
 
         self.port = port
         self.runLoopSource = source
-        Log.debug("event tap installed")
+        Log.debug("event tap installed at the \(chosen == .cghidEventTap ? "HID" : "session") level")
     }
 
     public func setEnabled(_ enabled: Bool) {
@@ -156,28 +185,80 @@ public extension CGEvent {
 
 /// Local pointer state on the sending Mac while the other one has the pointer.
 public enum LocalPointer {
-    /// Stops the physical device from moving this Mac's own pointer. Movement still reaches
-    /// the event tap as deltas, which is exactly what we want: the hardware drives the other
-    /// Mac while this Mac's pointer stays put.
-    public static func detachFromHardware() {
-        CGAssociateMouseAndMouseCursorPosition(0)
+    /// Stops the physical device from moving this Mac's own pointer.
+    ///
+    /// Only needed when the tap had to fall back to the session level. With a HID-level tap
+    /// the movement is deleted before the window server sees it, so the cursor never moves and
+    /// this is unnecessary — which is just as well, because the setting is global and a
+    /// process that died while it was off would be an unpleasant thing to debug.
+    @discardableResult
+    public static func detachFromHardware() -> Bool {
+        let result = CGAssociateMouseAndMouseCursorPosition(0)
+        if result != .success { Log.warn("could not detach the pointer from the hardware (\(result.rawValue))") }
+        return result == .success
     }
 
-    public static func reattachToHardware() {
-        CGAssociateMouseAndMouseCursorPosition(1)
+    @discardableResult
+    public static func reattachToHardware() -> Bool {
+        let result = CGAssociateMouseAndMouseCursorPosition(1)
+        if result != .success { Log.error("could not re-attach the pointer to the hardware (\(result.rawValue))") }
+        return result == .success
     }
 
     public static func warp(to point: ScreenPoint) {
         CGWarpMouseCursorPosition(CGPoint(x: point.x, y: point.y))
     }
 
+    /// Hides the cursor on every display.
+    ///
+    /// `CGDisplayHideCursor` is reference counted per process and historically only takes
+    /// effect for the frontmost application, so a background tool may well be refused. That is
+    /// survivable — a stationary cursor parked at the screen edge is a reasonable thing to
+    /// leave behind — so the result is reported rather than treated as fatal.
     @discardableResult
     public static func hide() -> Bool {
-        CGDisplayHideCursor(CGMainDisplayID()) == .success
+        var hidAny = false
+        for id in activeDisplayIDs() where CGDisplayHideCursor(id) == .success {
+            hidAny = true
+        }
+        return hidAny
     }
 
     @discardableResult
     public static func show() -> Bool {
-        CGDisplayShowCursor(CGMainDisplayID()) == .success
+        var shown = false
+        for id in activeDisplayIDs() where CGDisplayShowCursor(id) == .success {
+            shown = true
+        }
+        return shown
+    }
+
+    private static var crashSafetyInstalled = false
+
+    /// Re-couples the pointer and un-hides the cursor if this process exits unexpectedly.
+    ///
+    /// Detaching the pointer is a window-server setting, not a property of this process, so a
+    /// crash at the wrong moment could in principle leave the Mac with a cursor that does not
+    /// follow the mouse. `atexit` does not cover every way a process can die, but it covers
+    /// the ones that are survivable at all.
+    public static func installCrashSafety() {
+        guard !crashSafetyInstalled else { return }
+        crashSafetyInstalled = true
+        atexit {
+            CGAssociateMouseAndMouseCursorPosition(1)
+            CGDisplayShowCursor(CGMainDisplayID())
+        }
+    }
+
+    private static func activeDisplayIDs() -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else {
+            return [CGMainDisplayID()]
+        }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else {
+            return [CGMainDisplayID()]
+        }
+        return Array(ids.prefix(Int(count)))
     }
 }

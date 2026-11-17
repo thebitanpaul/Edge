@@ -29,6 +29,9 @@ done
 
 BUNDLE_ID="app.continuous.cli"
 APP="$ROOT/build/Continuous.app"
+ICON="$ROOT/Resources/Continuous.icns"
+# A self-signed identity created by Scripts/create-signing-identity.sh, if the user made one.
+SIGNING_IDENTITY="Continuous Local Signing"
 
 echo "==> Building ($CONFIG)"
 swift build -c "$CONFIG"
@@ -42,6 +45,12 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/continuous"
 
+if [ -f "$ICON" ]; then
+  cp "$ICON" "$APP/Contents/Resources/Continuous.icns"
+else
+  echo "    note: no icon at $ICON — run: swift Scripts/make-icon.swift"
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -51,6 +60,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key>            <string>Continuous</string>
     <key>CFBundleIdentifier</key>             <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>             <string>continuous</string>
+    <key>CFBundleIconFile</key>               <string>Continuous</string>
     <key>CFBundlePackageType</key>            <string>APPL</string>
     <key>CFBundleShortVersionString</key>     <string>$VERSION</string>
     <key>CFBundleVersion</key>                <string>$VERSION</string>
@@ -77,8 +87,23 @@ PLIST
 # the privacy database keys its grants on. Re-signing after a rebuild changes that identity, so
 # a rebuild may require re-ticking the boxes in System Settings — unavoidable without a paid
 # Developer ID certificate, and a fair trade for not having to trust anyone else's binary.
-echo "==> Signing (ad-hoc)"
-codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
+# Signing decides whether macOS keeps your privacy permissions across a rebuild.
+#
+# An ad-hoc signature identifies the app by the hash of its contents, so every rebuild looks
+# like a brand new app and Accessibility and Input Monitoring have to be granted again. A
+# self-signed certificate gives the bundle a stable identity instead, and the grants stick.
+# Scripts/create-signing-identity.sh makes one; this picks it up automatically if it exists.
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
+  echo "==> Signing as \"$SIGNING_IDENTITY\" (stable identity — permissions survive rebuilds)"
+  codesign --force --sign "$SIGNING_IDENTITY" --identifier "$BUNDLE_ID" \
+           --options runtime --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
+else
+  echo "==> Signing (ad-hoc)"
+  codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
+  echo "    note: every rebuild changes this app's identity, so macOS will ask for"
+  echo "          Accessibility and Input Monitoring again. To stop that happening:"
+  echo "              Scripts/create-signing-identity.sh"
+fi
 codesign --verify --verbose=1 "$APP" 2>&1 | sed 's/^/    /'
 
 # A tiny launcher so `continuous` on your PATH runs the *bundled* copy, keeping one code

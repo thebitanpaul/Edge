@@ -36,6 +36,11 @@ let usage = """
   connect [HOST|NAME]     Share this Mac's keyboard and mouse with a paired Mac
   discover                Browse the local network for listening Macs
 
+  status                  What is running right now, and where the pointer is
+  service install <ROLE>  Start at login as `listen` or `connect`
+  service start|stop      Control the login item
+  service uninstall       Remove it
+
   layout                  Show how both Macs' screens combine into one desktop
   layout set <EDGE>       Where the other Mac sits: left, right, top or bottom
   inject-test             Move this Mac's own pointer, to check Accessibility
@@ -54,6 +59,7 @@ let usage = """
   --port <N>              TCP port (default 52777)
   --duration <SECONDS>    Hold a connection for a fixed time, then exit
   --link-only             Connect without capturing this Mac's keyboard or mouse
+  --no-retry              Do not reconnect automatically when the link drops
   --no-bonjour            Do not advertise over Bonjour when listening
   --allow-public          Accept links from outside the private address ranges
   --rebind                Let a pinned pairing bind to a different Mac
@@ -150,6 +156,8 @@ do {
     case "id":          try Commands.identity(args)
     case "selftest":    try Commands.selftest(args)
     case "permissions": try Commands.permissions(args)
+    case "status":      try Commands.status(args)
+    case "service":     try Commands.service(args)
     case "layout":      try Commands.layout(args)
     case "inject-test", "selftest-inject":
                         try Commands.injectTest(args)

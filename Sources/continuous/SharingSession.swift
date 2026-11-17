@@ -39,6 +39,7 @@ final class SharingSession {
     private var router = PointerRouter()
     private var lastHeardFrom = Date()
     private var cursorHidden = false
+    private var pointerDetached = false
     private var forwarded = 0
 
     var onModeChange: ((Mode) -> Void)?
@@ -57,6 +58,7 @@ final class SharingSession {
         }
         try tap.start()
         self.tap = tap
+        LocalPointer.installCrashSafety()
     }
 
     func stop() {
@@ -104,6 +106,11 @@ final class SharingSession {
     }
 
     var isRemote: Bool { lock.lock(); defer { lock.unlock() }; return router.isRemote }
+
+    /// True once the event tap is installed. It stays installed across reconnections: with no
+    /// link attached it swallows nothing, so there is no reason to tear it down and risk
+    /// failing to get it back.
+    var isCapturing: Bool { tap != nil }
 
     var forwardedCount: Int { lock.lock(); defer { lock.unlock() }; return forwarded }
 
@@ -173,8 +180,12 @@ final class SharingSession {
         link.send(.enterScreen(x: Int32(entry.x), y: Int32(entry.y), flags: flags))
 
         // Stop the hardware from moving our own pointer; deltas still reach the tap.
-        LocalPointer.detachFromHardware()
+        // Order matters here. Park the cursor first, *then* detach it from the hardware:
+        // warping is documented to re-couple them, so detaching first and warping second
+        // silently undoes the detach — which is one way to end up with a second pointer
+        // sliding around this Mac while the real one is on the other.
         LocalPointer.warp(to: departure)
+        pointerDetached = LocalPointer.detachFromHardware()
         cursorHidden = LocalPointer.hide()
         if !cursorHidden {
             Log.debug("could not hide the local cursor; it will sit parked at the edge instead")
@@ -197,7 +208,7 @@ final class SharingSession {
     private func finishReturn(to destination: ScreenPoint?, link: SecureLink?, reason: String) {
         link?.send(.leaveScreen)
 
-        LocalPointer.reattachToHardware()
+        if pointerDetached { LocalPointer.reattachToHardware(); pointerDetached = false }
         if cursorHidden { LocalPointer.show(); cursorHidden = false }
         if let destination { LocalPointer.warp(to: destination) }
 

@@ -34,6 +34,7 @@ struct Args {
     static let booleanFlags: Set<String> = [
         "help", "version", "no-bonjour", "allow-public", "rebind",
         "json", "quiet", "prompt", "no-prompt", "force", "once", "keys", "link-only",
+        "no-retry", "open",
     ]
 
     init(_ argv: [String]) {
@@ -119,16 +120,24 @@ enum Runtime {
 
     nonisolated(unsafe) static var interrupted = false
 
-    /// Spins the main run loop until Ctrl-C.
+    /// Spins the main run loop while `shouldContinue` holds.
     ///
     /// Not the same as sleeping in a loop: CoreGraphics delivers display-reconfiguration
-    /// callbacks — and, from milestone 3, event taps — through the run loop, so a plain sleep
-    /// would silently never see a monitor being plugged in.
-    static func runUntilInterrupted(onTick: (() -> Void)? = nil) {
-        while !interrupted {
+    /// callbacks — and event taps — through the run loop, so a plain sleep would silently
+    /// never see a monitor being plugged in.
+    ///
+    /// Takes a predicate rather than reading `interrupted` directly, because "this connection
+    /// ended" and "the user pressed Ctrl-C" are different things: conflating them means a
+    /// dropped link looks like a request to quit, and nothing ever reconnects.
+    static func run(while shouldContinue: () -> Bool, onTick: (() -> Void)? = nil) {
+        while shouldContinue() {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
             onTick?()
         }
+    }
+
+    static func runUntilInterrupted(onTick: (() -> Void)? = nil) {
+        run(while: { !interrupted }, onTick: onTick)
     }
 
     static func installSignalHandlers() {

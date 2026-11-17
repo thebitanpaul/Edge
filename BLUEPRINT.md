@@ -188,8 +188,7 @@ them, and each lap round that loop makes another event.
 Dead keys and input methods, auto-reconnect with backoff, a LaunchAgent so it starts at login,
 latency instrumentation, and a menu-bar indicator for which Mac has the pointer.
 
-### M5 — Comfort (optional, each opt-in)
-Clipboard sync, a menu-bar status item, a small config UI.
+Clipboard sync, a menu-bar status item, dead keys and input methods, a small config UI.
 
 ---
 

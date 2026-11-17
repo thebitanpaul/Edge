@@ -44,6 +44,9 @@ extension Commands {
 
         let injector = EventInjector()
         let session = ReceivingSession(injector: injector)
+        let state = Box(RuntimeState(role: .listening))
+        state.value.save()
+        defer { RuntimeState.clear(.listening) }
 
         let options = LinkListener.Options(
             port: config.port,
@@ -75,6 +78,12 @@ extension Commands {
 
         listener.onLinkReady = { link, peer in
             directory.note(peer: peer)
+            state.mutate {
+                $0.connected = true
+                $0.peerName = peer.name
+                $0.endpoint = peer.endpoint
+                $0.save()
+            }
             ok("link up  ←  \(Style.bold(peer.name))  [\(peer.deviceID.short)]  \(peer.endpoint)")
             info("\(peer.tlsDescription)  ·  key \(String(Crypto.hex(peer.keyID).prefix(8)))")
             session.attach(link: link)
@@ -82,6 +91,7 @@ extension Commands {
 
         listener.onLinkClosed = { peer, error in
             session.detach()
+            state.mutate { $0.connected = false; $0.lastError = error?.localizedDescription; $0.save() }
             if let error { bad("link down: \(error.localizedDescription)") }
             else if let peer { info("link closed  ·  \(peer.name)") }
             info("waiting for the other Mac — Ctrl-C to stop")
@@ -110,36 +120,108 @@ extension Commands {
 
     // MARK: - connect  (the Mac with the keyboard and mouse)
 
+    /// One attempt's outcome, and whether trying again could possibly help.
+    private enum SessionOutcome {
+        case ended                  // closed cleanly, or the user stopped it
+        case dropped(Error?)        // lost the link; worth retrying
+        case fatal(String)          // retrying would fail the same way
+
+        var isRetryable: Bool {
+            if case .dropped = self { return true }
+            return false
+        }
+    }
+
     static func connect(_ args: Args) throws {
         let identity = try Identity.loadOrCreate()
         let config = try Config.load()
         let directory = try PairingDirectory.load()
+        let shareInput = !args.bool("link-only")
+        let retry = !args.bool("no-retry")
 
-        let target = try Target.resolve(argument: args.arg(0),
+        // Built once and kept across reconnections. The event tap stays installed while the
+        // link is down, which is safe by construction: with no link it swallows nothing.
+        let sharing = shareInput ? SharingSession(config: config, remoteName: "the other Mac") : nil
+        // Boxed because the session callbacks that update it outlive each call.
+        var initial = RuntimeState(role: .sharing)
+        initial.sharingInput = shareInput
+        let state = Box(initial)
+        state.value.save()
+        defer { RuntimeState.clear(state.value.role) }
+
+        Runtime.installSignalHandlers()
+
+        var backoff: TimeInterval = 1
+        var attempt = 0
+
+        while !Runtime.interrupted {
+            attempt += 1
+            let outcome = runSession(args: args, identity: identity, config: config,
+                                     directory: directory, sharing: sharing,
+                                     state: state, attempt: attempt)
+
+            switch outcome {
+            case .ended:
+                return
+            case .fatal(let reason):
+                Log.debug("not retrying: \(reason)")
+                throw ExitSilently(code: 1)
+            case .dropped(let error):
+                guard retry, !Runtime.interrupted else {
+                    if let error { bad(error.localizedDescription) }
+                    throw ExitSilently(code: error == nil ? 0 : 1)
+                }
+                if let error { warn(error.localizedDescription) }
+                state.mutate {
+                    $0.connected = false
+                    $0.lastError = error?.localizedDescription
+                    $0.save()
+                }
+
+                info(String(format: "reconnecting in %.0fs…  (Ctrl-C to stop)", backoff))
+                let wake = Date().addingTimeInterval(backoff)
+                while Date() < wake && !Runtime.interrupted {
+                    RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+                }
+                // Back off gently, but never so far that coming back from a closed lid
+                // takes a visible pause.
+                backoff = min(backoff * 2, 20)
+            }
+        }
+
+        sharing?.stop()
+        out()
+        info("stopped")
+    }
+
+    /// One connection, from dialling to the link closing.
+    private static func runSession(args: Args, identity: Identity, config: Config,
+                                   directory: PairingDirectory, sharing: SharingSession?,
+                                   state: Box<RuntimeState>, attempt: Int) -> SessionOutcome {
+        let target: Target.Resolved
+        do {
+            // Resolved fresh every time: the other Mac may have moved to a new address, which
+            // is one of the commoner reasons a link drops in the first place.
+            target = try Target.resolve(argument: args.arg(0),
                                         store: directory.snapshot,
                                         config: config,
                                         explicitPairing: args.string("pair"))
+        } catch {
+            if attempt == 1 { bad(error.localizedDescription) ; return .fatal("could not resolve the target") }
+            return .dropped(error)
+        }
 
+        let peerLabel = target.pairing.peerName ?? target.pairing.label
         info("dialling \(NetworkAddress.describe(target.endpoint))  ·  pairing '\(target.pairing.label)'  ·  via \(target.via)")
 
-        let link = LinkConnector.connect(to: target.endpoint,
-                                         psk: target.pairing.psk,
-                                         identity: identity,
-                                         localRole: .host)
+        let link = LinkConnector.connect(to: target.endpoint, psk: target.pairing.psk,
+                                         identity: identity, localRole: .host)
         let heartbeat = Heartbeat(link: link)
-        let state = Box<(done: Bool, failure: Error?)>((false, nil))
-
-        // `--link-only` keeps the milestone-1/2 behaviour: hold the link open and report
-        // latency, without touching this Mac's keyboard or pointer. Useful for diagnosing a
-        // network problem without also wondering whether the event tap is at fault.
-        let shareInput = !args.bool("link-only")
-        let sharing = shareInput ? SharingSession(config: config,
-                                                  remoteName: target.pairing.peerName
-                                                      ?? target.pairing.label) : nil
+        let closed = Box<(done: Bool, error: Error?)>((false, nil))
 
         sharing?.onModeChange = { mode in
             switch mode {
-            case .remote: out("  \(Style.cyan("→"))  pointer is on \(Style.bold(target.pairing.peerName ?? target.pairing.label))")
+            case .remote: out("  \(Style.cyan("→"))  pointer is on \(Style.bold(peerLabel))")
             case .local:  out("  \(Style.green("←"))  pointer is back on this Mac")
             }
         }
@@ -149,17 +231,14 @@ extension Commands {
             ok("link up  →  \(Style.bold(peer.name))  [\(peer.deviceID.short)]  \(peer.endpoint)")
             info("\(peer.tlsDescription)  ·  key \(String(Crypto.hex(peer.keyID).prefix(8)))")
             out()
-            // Tell the other Mac about our screens too; from milestone 3 it matters in both
-            // directions, and it makes the handshake symmetric now.
             link.send(.screenInfo(displays: Displays.current()))
             heartbeat.start()
-            sharing?.attach(link: link, layout: nil)
         }
 
         var printedSamples = 0
         heartbeat.onSample = { ms, stats in
             printedSamples += 1
-            if printedSamples <= 3 || printedSamples % 15 == 0 {
+            if printedSamples <= 3 || printedSamples % 30 == 0 {
                 out(String(format: "  rtt %6.2f ms   \(Style.dim(stats.summary))", ms))
             }
         }
@@ -183,95 +262,108 @@ extension Commands {
 
         link.onClose = { error in
             sharing?.detach(reason: "the link closed")
-            state.value = (true, error)
+            closed.value = (true, error)
         }
         link.start()
-        Runtime.installSignalHandlers()
 
-        // The tap is installed only once we know the link is up, so a failure to connect
-        // never leaves this Mac with its input being swallowed.
+        guard Runtime.wait(until: { link.peer != nil || closed.value.done }, timeout: 15),
+              let peer = link.peer else {
+            let error = closed.value.error
+                ?? ContinuousError.timedOut("no answer from \(NetworkAddress.describe(target.endpoint))")
+            return .dropped(error)
+        }
+
+        state.mutate {
+            $0.connected = true
+            $0.peerName = peer.name
+            $0.endpoint = peer.endpoint
+            $0.lastError = nil
+            $0.save()
+        }
+
         if let sharing {
-            guard Runtime.wait(until: { link.peer != nil || state.value.done }, timeout: 15),
-                  let peer = link.peer else {
-                if let err = state.value.failure { bad(err.localizedDescription) }
-                else { bad("could not establish the link") }
-                throw ExitSilently(code: 1)
-            }
-
-            // Both ends on one Mac would feed the injected events straight back into the
-            // tap that produced them, and each lap round that loop generates another event.
-            // Harmless as a transport test, which is why --link-only still allows it.
-            let sameDevice = peer.deviceID == identity.deviceID
-            let overLoopback = NetworkAddress.isLoopback(target.endpoint)
-            if sameDevice || overLoopback {
-                bad(sameDevice ? "this link loops back to this same Mac"
-                               : "this link runs over loopback, so both ends are this Mac")
+            // Both ends on one Mac would feed the injected events straight back into the tap
+            // that produced them, and each lap round that loop generates another event.
+            if peer.deviceID == identity.deviceID || NetworkAddress.isLoopback(target.endpoint) {
+                bad(peer.deviceID == identity.deviceID
+                    ? "this link loops back to this same Mac"
+                    : "this link runs over loopback, so both ends are this Mac")
                 out()
                 out("  Input sharing is refused here: the events this Mac injects would be")
                 out("  picked up by its own event tap and sent round again.")
                 out(Style.dim("    For a loopback transport test, use:  continuous connect --link-only"))
                 link.close(reason: "refusing to share input with myself")
-                throw ExitSilently(code: 1)
+                return .fatal("loopback")
             }
+
             // Mouse events reach a tap with Accessibility alone; keyboard events need Input
-            // Monitoring as well. Without that check the session starts, the pointer crosses
+            // Monitoring as well. Without this check the session starts, the pointer crosses
             // over, and only then does it become apparent that typing does nothing.
             if !Permissions.inputMonitoring().isGranted {
                 bad("Input Monitoring is not granted — the pointer would cross over but the keyboard would not follow")
                 explainCapturePermissions()
                 link.close(reason: "missing Input Monitoring")
-                throw ExitSilently(code: 1)
+                return .fatal("missing Input Monitoring")
             }
-            do {
-                try sharing.start()
-                out()
-                ok("sharing this Mac's keyboard and mouse")
-                let edgeWord: String
-                switch config.edge {
-                case .right: edgeWord = "right edge"
-                case .left: edgeWord = "left edge"
-                case .top: edgeWord = "top edge"
-                case .bottom: edgeWord = "bottom edge"
+
+            if !sharing.isCapturing {
+                do {
+                    try sharing.start()
+                    out()
+                    ok("sharing this Mac's keyboard and mouse")
+                    info("push the pointer off the \(config.edge.rawValue) edge of this Mac to cross over")
+                    info("hold \(Style.bold("⌘ ⌥ ⌃ ⇧")) together at any time to bring it straight back")
+                    out()
+                } catch {
+                    bad(error.localizedDescription)
+                    explainCapturePermissions()
+                    link.close(reason: "could not capture input")
+                    return .fatal("could not install the event tap")
                 }
-                info("push the pointer off the \(edgeWord) of this Mac to cross over")
-                info("hold \(Style.bold("⌘ ⌥ ⌃ ⇧")) together at any time to bring it straight back")
-                out()
-            } catch {
-                bad(error.localizedDescription)
-                explainCapturePermissions()
-                link.close(reason: "could not capture input")
-                throw ExitSilently(code: 1)
+            }
+            sharing.onModeChange = { mode in
+                state.mutate { $0.pointerIsRemote = (mode == .remote); $0.save() }
+                switch mode {
+                case .remote: out("  \(Style.cyan("→"))  pointer is on \(Style.bold(peer.name))")
+                case .local:  out("  \(Style.green("←"))  pointer is back on this Mac")
+                }
             }
         }
 
-        let duration = try args.double("duration")
-        let deadline = duration.map { Date().addingTimeInterval($0) }
-        Runtime.runUntilInterrupted {
+        let duration = try? args.double("duration")
+        let deadline = (duration ?? nil).map { Date().addingTimeInterval($0) }
+        var sessionOver = false
+        var reachedDeadline = false
+
+        Runtime.run(while: { !Runtime.interrupted && !sessionOver }) {
             sharing?.checkLiveness()
-            if state.value.done { Runtime.interrupted = true }
-            if let deadline, Date() >= deadline { Runtime.interrupted = true }
+            if closed.value.done { sessionOver = true }
+            if let deadline, Date() >= deadline { sessionOver = true; reachedDeadline = true }
         }
 
-        // Always give this Mac its pointer back, whatever ended the session.
-        sharing?.stop()
+        // Whatever ended the session, this Mac gets its pointer back.
+        sharing?.detach(reason: "session ended")
         heartbeat.stop()
+
         let stats = heartbeat.snapshot
         if stats.samples > 0 {
             out()
             ok("latency over \(stats.samples) samples: \(stats.summary)")
         }
-
         if let forwarded = sharing?.forwardedCount, forwarded > 0 {
             info("forwarded \(forwarded) pointer events")
         }
 
-        if let err = state.value.failure {
-            bad(err.localizedDescription)
-            throw ExitSilently(code: 1)
+        state.mutate { $0.connected = false; $0.pointerIsRemote = false; $0.save() }
+
+        // Only a deliberate stop ends things; anything else is worth reconnecting after.
+        if reachedDeadline || Runtime.interrupted {
+            link.close(reason: "user stopped")
+            out()
+            info("disconnected")
+            return .ended
         }
-        link.close(reason: "user stopped")
-        out()
-        info("disconnected")
+        return .dropped(closed.value.error)
     }
 
     // MARK: - shared reporting

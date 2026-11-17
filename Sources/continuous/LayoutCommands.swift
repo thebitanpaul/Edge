@@ -276,6 +276,70 @@ extension Commands {
         ok("capture works — \(counts.values.reduce(0, +)) events observed")
         info("nothing was swallowed: with no link there is nowhere to send input,")
         info("and that is exactly when this Mac must keep every event for itself.")
+
+        tap.stop()
+        try checkSwallowingStopsTheLocalCursor()
+    }
+
+    /// Checks that swallowed movement cannot drag this Mac's cursor along.
+    ///
+    /// This has to use *real* hardware movement. Synthetic events carry an absolute position
+    /// and move the cursor as they are posted, whether or not a tap deletes them, so driving
+    /// this check with injected events would pass or fail for reasons that have nothing to do
+    /// with the behaviour being tested.
+    private static func checkSwallowingStopsTheLocalCursor() throws {
+        guard isatty(STDIN_FILENO) == 1 else {
+            info("skipping the local-cursor check: it needs you to move the mouse")
+            return
+        }
+
+        let swallowed = Box<Int>(0)
+        let tap = EventTap { type, event in
+            switch type {
+            case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+                swallowed.mutate { $0 += 1 }
+                return nil          // exactly what happens while the pointer is on the other Mac
+            default:
+                return event
+            }
+        }
+        try tap.start()
+        defer { tap.stop() }
+
+        let level = tap.location == .cghidEventTap ? "HID" : "session"
+        LocalPointer.detachFromHardware()
+        defer { LocalPointer.reattachToHardware() }
+
+        let start = Displays.pointerLocation
+        out()
+        warn("move your mouse around for the next 4 seconds — the cursor should NOT move")
+        info("(this is what the other Mac having the pointer feels like; tap level: \(level))")
+
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+
+        let ended = Displays.pointerLocation
+        let drift = abs(ended.x - start.x) + abs(ended.y - start.y)
+        out()
+
+        guard swallowed.value > 0 else {
+            warn("no movement arrived — did the mouse actually move? skipping this check")
+            return
+        }
+
+        if drift < 4 {
+            ok("cursor held still at \(start) while \(swallowed.value) movements were swallowed")
+            info("no second pointer will trail along on this Mac")
+        } else {
+            bad("cursor drifted \(Int(drift))px to \(ended) despite swallowing \(swallowed.value) movements")
+            out(Style.dim("    That is the two-pointers symptom. The tap is at the \(level) level"))
+            out(Style.dim("    and the pointer was detached from the hardware; if both are true and"))
+            out(Style.dim("    the cursor still moves, please report it with this output."))
+            LocalPointer.warp(to: start)
+            throw ExitSilently(code: 1)
+        }
     }
 
     // MARK: - remote-test
