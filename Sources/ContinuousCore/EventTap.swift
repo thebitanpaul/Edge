@@ -207,9 +207,14 @@ public enum LocalPointer {
         /// What the window server says, rather than what the hide call returned.
         /// `nil` when it could not be asked.
         public var confirmedHidden: Bool?
-        /// How many unbalanced hides this process owns. `CGDisplayHideCursor` is reference
-        /// counted, so every one of them needs a matching show or the cursor never returns.
-        public var hideCount = 0
+        /// How many times the cursor has been hidden *on every display*.
+        ///
+        /// Rounds, not a total. `CGDisplayHideCursor` keeps a count per display, so hiding
+        /// across two displays and then showing twice on one of them balances neither: the
+        /// main display ends a show to the good — which quietly cancels the next crossing's
+        /// hide — and the second display is never restored at all. Counting rounds and
+        /// showing everywhere the same number of times keeps every display at zero.
+        public var hideRounds = 0
         public var parkedAt = ScreenPoint(x: 0, y: 0)
 
         public init() {}
@@ -292,8 +297,8 @@ public enum LocalPointer {
         // Every display, not just the main one. The cursor is parked wherever it left, which
         // on a Mac with an external monitor is usually not the main display — and hiding a
         // display the cursor is not on leaves it sitting there in plain sight.
-        state.hideCount = hideOnAllDisplays()
-        state.hidden = state.hideCount > 0
+        state.hidden = hideOnAllDisplays()
+        if state.hidden { state.hideRounds = 1 }
 
         // Last, deliberately: hiding the cursor re-couples it to the mouse.
         state.uncoupled = CGAssociateMouseAndMouseCursorPosition(0) == .success
@@ -304,10 +309,15 @@ public enum LocalPointer {
         return state
     }
 
-    private static func hideOnAllDisplays() -> Int {
-        var hidden = 0
-        for id in activeDisplayIDs() where CGDisplayHideCursor(id) == .success { hidden += 1 }
-        return hidden
+    @discardableResult
+    private static func hideOnAllDisplays() -> Bool {
+        var any = false
+        for id in activeDisplayIDs() where CGDisplayHideCursor(id) == .success { any = true }
+        return any
+    }
+
+    private static func showOnAllDisplays() {
+        for id in activeDisplayIDs() { CGDisplayShowCursor(id) }
     }
 
     /// Hides the cursor again if something else put it back. Balanced by `endCapture`.
@@ -317,9 +327,8 @@ public enum LocalPointer {
     /// failure is what strands a pointer on the screen you have just left.
     public static func reassertHidden(_ state: inout CaptureState) {
         enableBackgroundCursorControl()
-        let hidden = hideOnAllDisplays()
-        guard hidden > 0 else { return }
-        state.hideCount += hidden
+        guard hideOnAllDisplays() else { return }
+        state.hideRounds += 1
         state.hidden = true
     }
 
@@ -331,23 +340,18 @@ public enum LocalPointer {
     public static func hideOnly() -> CaptureState {
         var state = CaptureState()
         state.backgroundControl = enableBackgroundCursorControl()
-        state.hideCount = hideOnAllDisplays()
-        state.hidden = state.hideCount > 0
+        state.hidden = hideOnAllDisplays()
+        if state.hidden { state.hideRounds = 1 }
         state.confirmedHidden = isCursorVisible.map { !$0 }
         return state
     }
 
     public static func endCapture(_ state: CaptureState, restoringTo point: ScreenPoint?) {
-        if state.hideCount > 0 {
+        if state.hideRounds > 0 {
             enableBackgroundCursorControl()
-            // One show per hide: the count is per-process and unbalancing it would leave this
-            // Mac with no cursor at all until the next login.
-            for _ in 0..<state.hideCount {
-                if CGDisplayShowCursor(CGMainDisplayID()) != .success {
-                    Log.error("could not show the cursor again")
-                    break
-                }
-            }
+            // One show per hide, on the same displays. Anything else leaves a display stuck
+            // hidden or a show to the good, and a surplus show cancels the next hide.
+            for _ in 0..<state.hideRounds { showOnAllDisplays() }
         }
         if CGAssociateMouseAndMouseCursorPosition(1) != .success {
             Log.error("could not re-couple the pointer to the mouse")

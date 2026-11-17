@@ -171,99 +171,106 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func rebuildMenu() {
         menu.removeAllItems()
         let state = lastKnownState
+        let store = (try? SecretStore.load()) ?? SecretStore()
 
-        // What is happening, in the first two lines, without having to read a log.
-        let paired = !(((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty)
-
-        if !paired {
-            menu.addItem(disabled("Not set up yet"))
+        if store.pairings.filter(\.isBound).isEmpty && store.pairings.isEmpty {
+            menu.addItem(disabled("Not set up"))
             menu.addItem(action("Set up…", #selector(runSetup)))
             menu.addItem(.separator())
-            menu.addItem(action("Quit Continuous", #selector(quit)))
+            menu.addItem(action("Quit", #selector(quit)))
             return
         }
 
+        // Status, in as few lines as will carry it.
         if !isRunning {
-            menu.addItem(disabled("Not running"))
-            menu.addItem(disabled("This Mac is the \(mode.shortTitle.lowercased()) device"))
+            menu.addItem(disabled("Stopped · \(mode.shortTitle)"))
         } else if let state, state.connected {
-            menu.addItem(disabled("Connected to \(state.peerName ?? "the other Mac")"))
-            if mode == .host {
-                menu.addItem(disabled(state.pointerIsRemote == true
-                                      ? "Pointer is on \(state.peerName ?? "the other Mac")"
-                                      : "Pointer is on this Mac"))
+            let peer = state.peerName ?? "the other Mac"
+            menu.addItem(disabled(mode == .host && state.pointerIsRemote == true
+                                  ? "Pointer on \(peer)"
+                                  : "Connected · \(peer)"))
+            if let rtt = state.rttMillis {
+                menu.addItem(disabled(String(format: "%.0f ms%@", rtt,
+                                             state.clipboardActive ? " · clipboard" : "")))
             }
-            var detail: [String] = []
-            if let rtt = state.rttMillis { detail.append(String(format: "round trip %.1f ms", rtt)) }
-            if state.clipboardActive { detail.append("clipboard shared") }
-            if !detail.isEmpty { menu.addItem(disabled(detail.joined(separator: " · "))) }
         } else {
-            menu.addItem(disabled(mode == .host ? "Looking for the other Mac…"
-                                                : "Waiting for the other Mac…"))
+            menu.addItem(disabled("Connecting…"))
             menu.addItem(disabled(waitingHint))
-            if let error = state?.lastError { menu.addItem(disabled(error)) }
-            menu.addItem(action("Why is it not connecting?…", #selector(troubleshoot)))
         }
 
         menu.addItem(.separator())
         menu.addItem(action(isRunning ? "Stop" : "Start", #selector(toggleRunning)))
 
-        let modeItem = NSMenuItem(title: "This Mac is: \(mode.shortTitle)", action: nil,
+        let modeItem = NSMenuItem(title: "This Mac: \(mode.shortTitle)", action: nil,
                                   keyEquivalent: "")
         let modeMenu = NSMenu()
-        modeMenu.addItem(disabled("The other Mac must be set to the opposite"))
         for candidate in [Mode.host, .client] {
-            let item = NSMenuItem(title: candidate.title, action: #selector(selectMode(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.state = candidate == mode ? .on : .off
-            item.representedObject = candidate.rawValue
-            modeMenu.addItem(item)
+            let entry = NSMenuItem(title: candidate.title, action: #selector(selectMode(_:)),
+                                   keyEquivalent: "")
+            entry.target = self
+            entry.state = candidate == mode ? .on : .off
+            entry.representedObject = candidate.rawValue
+            modeMenu.addItem(entry)
         }
         modeItem.submenu = modeMenu
         menu.addItem(modeItem)
 
         menu.addItem(.separator())
-        menu.addItem(action("Set up…", #selector(runSetup)))
         menu.addItem(devicesMenuItem())
         menu.addItem(arrangementMenuItem())
-        menu.addItem(.separator())
+        // Only where it does something. A secondary Mac listens on everything it has, so the
+        // choice has no effect there and offering it only invites someone to set it wrongly.
+        if mode == .host { menu.addItem(linkMenuItem()) }
 
         let config = (try? Config.load()) ?? Config()
+        menu.addItem(.separator())
         let clipboard = action("Share clipboard", #selector(toggleClipboard))
         clipboard.state = config.clipboardSharing ? .on : .off
         menu.addItem(clipboard)
-
-        let linkItem = NSMenuItem(title: "Connect over", action: nil, keyEquivalent: "")
-        let linkMenu = NSMenu()
-        for choice in LinkPreference.allCases {
-            let entry = NSMenuItem(title: choice.title, action: #selector(selectLink(_:)),
-                                   keyEquivalent: "")
-            entry.target = self
-            entry.state = config.link == choice ? .on : .off
-            entry.representedObject = choice.rawValue
-            linkMenu.addItem(entry)
-        }
-        linkMenu.addItem(.separator())
-        linkMenu.addItem(disabled("Only affects how this Mac connects out."))
-        linkMenu.addItem(disabled("The other Mac can be set differently —"))
-        linkMenu.addItem(disabled("it accepts whichever link you arrive on."))
-        linkMenu.addItem(.separator())
-        linkMenu.addItem(disabled("A USB-C or Thunderbolt cable between the"))
-        linkMenu.addItem(disabled("two Macs is far quicker than Wi-Fi."))
-        linkItem.submenu = linkMenu
-        menu.addItem(linkItem)
 
         let login = action("Start at login", #selector(toggleLoginItem))
         login.state = LaunchAgent.installedRole != nil ? .on : .off
         menu.addItem(login)
 
         menu.addItem(.separator())
-        menu.addItem(action("Why is it not connecting?…", #selector(troubleshoot)))
-        menu.addItem(action("Open log…", #selector(openLog)))
-        menu.addItem(disabled(Runtime.version))
-        menu.addItem(.separator())
-        menu.addItem(action("Quit Continuous", #selector(quit)))
+        menu.addItem(helpMenuItem())
+        menu.addItem(action("Quit", #selector(quit)))
+    }
+
+    /// Everything worth having and not worth reading every time the menu opens.
+    private func helpMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.addItem(action("Set up again…", #selector(runSetup)))
+        submenu.addItem(.separator())
+        submenu.addItem(action("Why is it not connecting?…", #selector(troubleshoot)))
+        submenu.addItem(action("Open log…", #selector(openLog)))
+        submenu.addItem(.separator())
+        submenu.addItem(disabled(Runtime.version))
+        item.submenu = submenu
+        return item
+    }
+
+    private func linkMenuItem() -> NSMenuItem {
+        let config = (try? Config.load()) ?? Config()
+        let hasCable = NetworkAddress.localAddresses().contains(where: NetworkAddress.isLinkLocalIPv4)
+        let item = NSMenuItem(title: "Connect over", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for choice in LinkPreference.allCases {
+            let entry = NSMenuItem(title: choice.title, action: #selector(selectLink(_:)),
+                                   keyEquivalent: "")
+            entry.target = self
+            entry.state = config.link == choice ? .on : .off
+            entry.representedObject = choice.rawValue
+            // Saying "no cable" is more use than letting someone pick one that is not there.
+            if choice == .cable && !hasCable {
+                entry.isEnabled = false
+                entry.title = "Cable — none connected"
+            }
+            submenu.addItem(entry)
+        }
+        item.submenu = submenu
+        return item
     }
 
     // MARK: Setup
@@ -278,13 +285,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = "Which Mac is this?"
         alert.informativeText =
-            "Primary is the Mac whose keyboard and mouse you use. Secondary is the one it "
-            + "reaches onto. Set the other Mac to the opposite — if both are the same, "
-            + "neither connects.\n\n"
-            + "Before you start, make sure both Macs are on the same Wi-Fi network, or "
-            + "connected to each other with a USB-C or Thunderbolt cable."
-        alert.addButton(withTitle: "Primary — I use this Mac's keyboard")
-        alert.addButton(withTitle: "Secondary — control it from the other Mac")
+            "Set the other Mac to the opposite.\n\n"
+            + "Both Macs need the same Wi-Fi network, or a USB-C cable between them."
+        alert.addButton(withTitle: "Primary — I use this keyboard")
+        alert.addButton(withTitle: "Secondary — controlled by the other")
         alert.addButton(withTitle: "Cancel")
 
         let answer = alert.runModal()
@@ -294,8 +298,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let store = (try? SecretStore.load()) ?? SecretStore()
         guard store.pairings.filter(\.isBound).isEmpty else {
             notify("Set as \(mode.shortTitle)",
-                   "This Mac is already paired. Set the other Mac to \(mode.opposite.shortTitle) "
-                   + "and press Start on both.")
+                   "Already paired. Set the other Mac to \(mode.opposite.shortTitle), then "
+                   + "Start on both.")
             refresh()
             return
         }
@@ -343,9 +347,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         if let waiting = pending.first {
             submenu.addItem(.separator())
-            submenu.addItem(disabled(mode == .host
-                ? "Waiting for the other Mac to use your code"
-                : "Waiting to connect — press Start on both Macs"))
+            submenu.addItem(disabled("Not connected yet"))
             let cancel = NSMenuItem(title: "Cancel this pairing", action: #selector(forgetDevice(_:)),
                                     keyEquivalent: "")
             cancel.target = self
@@ -355,7 +357,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         submenu.addItem(.separator())
         submenu.addItem(action("Connect to a nearby Mac…", #selector(pairNearby)))
-        submenu.addItem(disabled("…choose this on both Macs. Nothing to type."))
+        submenu.addItem(disabled("…choose it on both Macs"))
         item.submenu = submenu
         return item
     }
@@ -390,6 +392,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Asks for one line of text, pre-filled.
     private func prompt(title: String, explanation: String, value: String,
                         placeholder: String, confirm: String) -> String? {
+        // Without this the field ignores every keystroke. A menu-bar app runs as an
+        // accessory and is never the active application, so its windows do not become key
+        // and nothing reaches the text field — it looks broken rather than inactive.
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = explanation
@@ -400,6 +406,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         alert.addButton(withTitle: confirm)
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
+        DispatchQueue.main.async { alert.window.makeFirstResponder(field) }
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -431,8 +438,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard let pairing = store.pairings.first(where: { $0.label == label }) else { return }
 
         guard let name = prompt(title: "Rename this Mac",
-                                explanation: "Only a name for this list on this Mac. It does "
-                                    + "not change anything on the other machine.",
+                                explanation: "Just a name in this list.",
                                 value: pairing.peerName ?? pairing.label,
                                 placeholder: "Work Mac",
                                 confirm: "Rename"), !name.isEmpty else { return }
@@ -452,9 +458,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let current = pairing.manualEndpoint ?? pairing.lastEndpoint ?? ""
         guard let address = prompt(
             title: "Address of the other Mac",
-            explanation: "Needed when Bonjour discovery is blocked, which is common on managed "
-                + "networks. Find it on the other Mac under Devices, or from `continuous doctor`. "
-                + "Leave it empty to go back to discovery.",
+            explanation: "For networks that block discovery. Empty to go back to automatic.",
             value: current,
             placeholder: "192.168.1.42",
             confirm: "Save") else { return }
@@ -489,18 +493,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     /// The modal half, shared by discovery and by dialling a known address.
     private func runPairing(_ session: NetworkPairingSession, allowAddressFallback: Bool) {
+        // One address, not a list. Offering two and leaving the choice to the reader is how
+        // "which one do I type?" happens; the cable is always the better answer when it
+        // exists, so pick it.
         let addresses = NetworkAddress.localAddresses()
-        let cable = addresses.first(where: NetworkAddress.isLinkLocalIPv4)
+        let best = addresses.first(where: NetworkAddress.isLinkLocalIPv4) ?? addresses.first
+        let isCable = best.map(NetworkAddress.isLinkLocalIPv4) ?? false
 
+        NSApp.activate(ignoringOtherApps: true)
         let waiting = NSAlert()
         waiting.messageText = "Looking for the other Mac"
         waiting.informativeText =
-            "Do the same on the other Mac — Set up…, or Devices ▸ Connect to a nearby Mac. "
-            + "They will each show the same six digits for you to compare.\n\n"
-            + "This Mac is at:  " + addresses.joined(separator: "   ")
-            + (cable != nil ? "\n(\(cable!) is the cable.)" : "")
-            + "\n\nIf they do not find each other — some networks block discovery — type one "
-            + "of those addresses into the other Mac, under Connect to a nearby Mac."
+            "Choose the same on the other Mac. Both will show six digits to compare."
+            + (best.map { "\n\nThis Mac: \($0)" + (isCable ? " (cable)" : "") } ?? "")
         waiting.addButton(withTitle: "Cancel")
         if allowAddressFallback {
             waiting.addButton(withTitle: "Enter the other Mac's address…")
@@ -545,10 +550,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         let compare = NSAlert()
         compare.messageText = digits
-        compare.informativeText =
-            "Does \(peerName) show the same six digits?\n\n"
-            + "Confirm on both Macs. If the numbers differ, something is between them — say "
-            + "No and try again."
+        compare.informativeText = "Does \(peerName) show the same number? Confirm on both."
         compare.addButton(withTitle: "Yes, they match")
         compare.addButton(withTitle: "No")
 
@@ -572,7 +574,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Wait for the other Mac to confirm too.
         let patience = NSAlert()
         patience.messageText = "Waiting for \(peerName)"
-        patience.informativeText = "Confirm the same number over there."
+        patience.informativeText = "Confirm the number over there."
         patience.addButton(withTitle: "Cancel")
         if finish.value == nil {
             if patience.runModal() == .alertFirstButtonReturn, finish.value == nil {
@@ -599,10 +601,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func pairNearbyByAddress() {
         guard let address = prompt(
             title: "The other Mac's address",
-            explanation: "On the other Mac, choose Connect to a nearby Mac. The window it "
-                + "opens lists that Mac's addresses — type one of them here.\n\n"
-                + "If the two Macs are joined by a USB-C cable, use the address beginning "
-                + "169.254: that is the cable, and it is far quicker than Wi-Fi.",
+            explanation: "Choose Connect to a nearby Mac over there; it shows its address.",
             value: "",
             placeholder: "192.168.1.42",
             confirm: "Connect"), !address.isEmpty else { return }
@@ -626,9 +625,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             try store.save()
             restartForPairingChange()
             notify("Paired with \(outcome.peerName)",
-                   "Both Macs now hold the same key — no code was typed, so they cannot differ."
-                   + "\n\nThis Mac is the \(mode.shortTitle.lowercased()) device; set the other "
-                   + "to \(mode.opposite.shortTitle.lowercased()). Then press Start on both.")
+                   "Set the other Mac to \(mode.opposite.shortTitle), then Start on both.")
         } catch {
             notify("Could not save the pairing", error.localizedDescription)
         }
@@ -725,9 +722,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard let label = sender.representedObject as? String else { return }
         let confirm = NSAlert()
         confirm.messageText = "Forget this Mac?"
-        confirm.informativeText =
-            "Its key will no longer be accepted, and you will need a new pairing code to "
-            + "connect the two Macs again."
+        confirm.informativeText = "You will need to pair the two Macs again."
         confirm.addButton(withTitle: "Forget")
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
@@ -750,7 +745,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: "Screen arrangement", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
 
-        submenu.addItem(disabled("The other Mac is to my…"))
+        submenu.addItem(disabled("The other Mac is to my"))
         for edge in ScreenEdge.allCases {
             let title: String
             switch edge {
@@ -767,7 +762,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         submenu.addItem(.separator())
-        submenu.addItem(disabled("When the screens are different sizes…"))
+        submenu.addItem(disabled("If the screens differ in size"))
         for alignment in ScreenAlignment.allCases {
             let title: String
             switch alignment {
@@ -785,7 +780,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         submenu.addItem(.separator())
-        submenu.addItem(action("Show arrangement…", #selector(showArrangement)))
+        submenu.addItem(action("Show…", #selector(showArrangement)))
         item.submenu = submenu
         return item
     }
@@ -881,8 +876,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         try? config.save()
 
         if config.clipboardSharing {
-            notify("Clipboard sharing on",
-                   "Both Macs must have it on. Whatever you copy is sent to the other Mac.")
+            notify("Clipboard sharing on", "Turn it on over there too.")
         }
         // The setting is read when a session starts, so an existing one has to be restarted.
         if isRunning {
@@ -990,10 +984,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let alert = NSAlert()
             alert.messageText = "Already running"
             alert.informativeText =
-                "A Continuous session is already running on this Mac (pid \(other.pid), "
-                + "\(other.role.rawValue)) — probably started from a terminal, or a login item."
-                + "\n\nOne Mac runs one session. Two means two event taps and doubled traffic, "
-                + "which feels like a laggy pointer and a cursor that will not stay hidden."
+                "Already running here (pid \(other.pid)). Two at once makes the pointer lag."
             alert.addButton(withTitle: "Take over")
             alert.addButton(withTitle: "Leave it")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -1064,6 +1055,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func notify(_ title: String, _ body: String) {
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = body

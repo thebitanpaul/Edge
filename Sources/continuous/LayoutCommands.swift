@@ -304,6 +304,29 @@ extension Commands {
         default:
             warn("could not ask the window server whether the cursor is visible")
         }
+        // Once is not enough. The hide count is kept per display, so an imbalance only
+        // shows up on the *next* crossing — the surplus show cancels it — and gets worse each
+        // time. A single round of this check passed happily while every second crossing left
+        // a cursor behind.
+        out()
+        var failedOn: Int?
+        for round in 1...5 {
+            let park = LocalPointer.liveLocation
+            let capture = LocalPointer.beginCapture(parkingAt: park)
+            Thread.sleep(forTimeInterval: 0.12)
+            let hiddenNow = LocalPointer.isCursorVisible == false
+            LocalPointer.endCapture(capture, restoringTo: park)
+            Thread.sleep(forTimeInterval: 0.12)
+            let backNow = LocalPointer.isCursorVisible == true
+            if !hiddenNow || !backNow { failedOn = failedOn ?? round }
+        }
+        if let round = failedOn {
+            bad("crossing \(round) of 5 left the cursor in the wrong state")
+            out(Style.dim("    Hides and shows are not balancing across displays."))
+            throw ExitSilently(code: 1)
+        }
+        ok("five crossings in a row each hid the cursor and gave it back")
+
         out()
         info("whether it stays *put* while the pointer is away is a separate question:")
         info("run `continuous cursor-doctor`.")

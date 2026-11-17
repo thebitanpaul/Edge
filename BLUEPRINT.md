@@ -491,6 +491,27 @@ The link preference itself needed no warning in the end: a listening Mac accepts
 you arrive on, so the two Macs need not agree. The menu says so, which is better than a warning
 about a problem that does not exist.
 
+#### The lingering cursor, finally: a count kept per display
+
+`CGDisplayHideCursor` keeps its reference count **per display**. The code hid on every display
+— correct, since the cursor parks wherever it left — and then showed twice on the *main* one.
+On a two-display Mac each crossing therefore left the main display one show to the good and the
+second display still hidden. A surplus show cancels the *next* crossing's hide, which is why
+the cursor appeared on some crossings and not others, and why it got worse the more you crossed.
+
+Hides are now counted in rounds and shown on the same displays the same number of times, so
+every display returns to zero. `capture-test` performs five crossings rather than one, because
+a single round passed happily throughout: the fault only shows on the crossing *after* the
+unbalanced one.
+
+**Also in this round:** a text field in a menu-bar app ignores every keystroke, because an
+accessory app is never the active application and its windows never become key —
+`NSApp.activate` before each modal. The pairing window showed two addresses and let the reader
+choose, which is how "which one?" happens; it shows one, preferring the cable. The link
+preference is offered only on the primary Mac, since a listening Mac accepts whatever arrives
+and the setting does nothing there. Diagnostics moved under Help, and the prompts were cut to
+about a third of their length.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 

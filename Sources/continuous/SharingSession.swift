@@ -168,7 +168,7 @@ final class SharingSession {
 
     private var captureSummary: String { lock.lock(); defer { lock.unlock() }; return capture.summary }
 
-    private var hideAttempts: Int { lock.lock(); defer { lock.unlock() }; return capture.hideCount }
+    private var hideAttempts: Int { lock.lock(); defer { lock.unlock() }; return capture.hideRounds }
 
     /// True once the event tap is installed. It stays installed across reconnections: with no
     /// link attached it swallows nothing, so there is no reason to tear it down and risk
@@ -318,7 +318,7 @@ final class SharingSession {
             guard LocalPointer.isCursorVisible == true else { return }
             self.lock.lock()
             LocalPointer.reassertHidden(&self.capture)
-            let total = self.capture.hideCount
+            let total = self.capture.hideRounds
             self.lock.unlock()
             if total == 2 || total % 50 == 0 {
                 Log.debug("something re-showed this Mac's cursor; hidden again (\(total) times)")
