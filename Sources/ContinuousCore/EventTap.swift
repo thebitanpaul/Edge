@@ -207,6 +207,9 @@ public enum LocalPointer {
         /// What the window server says, rather than what the hide call returned.
         /// `nil` when it could not be asked.
         public var confirmedHidden: Bool?
+        /// How many unbalanced hides this process owns. `CGDisplayHideCursor` is reference
+        /// counted, so every one of them needs a matching show or the cursor never returns.
+        public var hideCount = 0
         public var parkedAt = ScreenPoint(x: 0, y: 0)
 
         public init() {}
@@ -258,15 +261,22 @@ public enum LocalPointer {
 
     private typealias CursorIsVisibleFn = @convention(c) () -> boolean_t
 
+    /// Resolved once. This is checked many times a second while the pointer is away, and
+    /// `dlsym` on every call would be a silly way to spend a window-server round trip.
+    private static let cursorIsVisibleFn: CursorIsVisibleFn? = {
+        guard let handle = dlopen(nil, RTLD_LAZY),
+              let symbol = dlsym(handle, "CGCursorIsVisible") else { return nil }
+        return unsafeBitCast(symbol, to: CursorIsVisibleFn.self)
+    }()
+
     /// Whether the window server currently considers the cursor visible.
     ///
     /// Withdrawn from the SDK years ago but still present in CoreGraphics, and the only way
     /// to tell a hide that worked from a hide that returned success and did nothing — which
     /// is the difference between one pointer and two. `nil` if it cannot be resolved.
     public static var isCursorVisible: Bool? {
-        guard let handle = dlopen(nil, RTLD_LAZY),
-              let symbol = dlsym(handle, "CGCursorIsVisible") else { return nil }
-        return unsafeBitCast(symbol, to: CursorIsVisibleFn.self)() != 0
+        guard let fn = cursorIsVisibleFn else { return nil }
+        return fn() != 0
     }
 
     // MARK: - Capture
@@ -280,6 +290,7 @@ public enum LocalPointer {
 
         state.backgroundControl = enableBackgroundCursorControl()
         state.hidden = CGDisplayHideCursor(CGMainDisplayID()) == .success
+        if state.hidden { state.hideCount = 1 }
 
         // Last, deliberately: hiding the cursor re-couples it to the mouse.
         state.uncoupled = CGAssociateMouseAndMouseCursorPosition(0) == .success
@@ -290,11 +301,25 @@ public enum LocalPointer {
         return state
     }
 
+    /// Hides the cursor again if something else put it back. Balanced by `endCapture`.
+    public static func reassertHidden(_ state: inout CaptureState) {
+        guard state.hidden else { return }
+        enableBackgroundCursorControl()
+        if CGDisplayHideCursor(CGMainDisplayID()) == .success {
+            state.hideCount += 1
+        }
+    }
+
     public static func endCapture(_ state: CaptureState, restoringTo point: ScreenPoint?) {
-        if state.hidden {
+        if state.hideCount > 0 {
             enableBackgroundCursorControl()
-            if CGDisplayShowCursor(CGMainDisplayID()) != .success {
-                Log.error("could not show the cursor again")
+            // One show per hide: the count is per-process and unbalancing it would leave this
+            // Mac with no cursor at all until the next login.
+            for _ in 0..<state.hideCount {
+                if CGDisplayShowCursor(CGMainDisplayID()) != .success {
+                    Log.error("could not show the cursor again")
+                    break
+                }
             }
         }
         if CGAssociateMouseAndMouseCursorPosition(1) != .success {

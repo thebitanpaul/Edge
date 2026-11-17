@@ -29,6 +29,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var refreshTimer: Timer?
     private var mode: Mode
     private var lastKnownState: RuntimeState?
+    private var lastIconSignature = ""
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
 
@@ -42,6 +43,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
         statusItem.button?.toolTip = "Continuous"
+        lastIconSignature = iconSignature
         redrawIcon()
 
         // Faster than a human notices a state change, slower than anything that matters.
@@ -63,10 +65,28 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return currentState != nil
     }
 
+    /// A one-line description of everything the icon depends on, so it can be redrawn only
+    /// when it would actually look different.
+    private var iconSignature: String {
+        let state = lastKnownState
+        return [isRunning ? "run" : "stop",
+                state?.connected == true ? "up" : "down",
+                state?.pointerIsRemote == true ? "away" : "here"].joined(separator: "/")
+    }
+
     private func refresh() {
         lastKnownState = currentState
-        redrawIcon()
-        if menu.numberOfItems > 0 { rebuildMenu() }
+
+        // Only redraw when it would differ. Touching an NSStatusItem button makes AppKit
+        // reconsider the cursor, and doing that twice a second un-hides the cursor the
+        // session is holding hidden while the pointer is on the other Mac — which is how the
+        // menu-bar front end ended up leaving a visible pointer behind and the terminal did not.
+        let signature = iconSignature
+        if signature != lastIconSignature {
+            lastIconSignature = signature
+            redrawIcon()
+        }
+        // The menu is rebuilt when it opens; rebuilding it while closed is invisible work.
     }
 
     private func redrawIcon() {
@@ -148,6 +168,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(modeItem)
 
         menu.addItem(.separator())
+        menu.addItem(devicesMenuItem())
+        menu.addItem(arrangementMenuItem())
+        menu.addItem(.separator())
 
         let config = (try? Config.load()) ?? Config()
         let clipboard = action("Share clipboard", #selector(toggleClipboard))
@@ -163,6 +186,225 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(disabled(Runtime.version))
         menu.addItem(.separator())
         menu.addItem(action("Quit Continuous", #selector(quit)))
+    }
+
+    // MARK: Devices
+
+    private func devicesMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Devices", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let store = (try? SecretStore.load()) ?? SecretStore()
+
+        if store.pairings.isEmpty {
+            submenu.addItem(disabled("No Macs paired yet"))
+        } else {
+            for pairing in store.pairings {
+                let name = pairing.peerName ?? pairing.label
+                let connected = lastKnownState?.connected == true
+                    && lastKnownState?.peerName == pairing.peerName
+                let entry = NSMenuItem(title: name, action: nil, keyEquivalent: "")
+                entry.state = connected ? .on : .off
+
+                let detail = NSMenu()
+                detail.addItem(disabled(pairing.isBound
+                                        ? "Paired \(relativeTime(pairing.createdAt))"
+                                        : "Waiting for its first connection"))
+                if let endpoint = pairing.lastEndpoint {
+                    detail.addItem(disabled("Last seen at \(endpoint)"))
+                }
+                detail.addItem(.separator())
+                let forget = NSMenuItem(title: "Forget \(name)…",
+                                        action: #selector(forgetDevice(_:)), keyEquivalent: "")
+                forget.target = self
+                forget.representedObject = pairing.label
+                detail.addItem(forget)
+                entry.submenu = detail
+                submenu.addItem(entry)
+            }
+        }
+
+        submenu.addItem(.separator())
+        submenu.addItem(action("Pair a new Mac…", #selector(pairNewMac)))
+        submenu.addItem(action("Enter a pairing code…", #selector(enterPairingCode)))
+        item.submenu = submenu
+        return item
+    }
+
+    @objc private func pairNewMac() {
+        let code = PairingCode.generate()
+        do {
+            var store = try SecretStore.load()
+            store.pairings.append(Pairing(psk: code.psk, label: "Mac \(store.pairings.count + 1)"))
+            try store.save()
+        } catch {
+            notify("Could not create a pairing", error.localizedDescription)
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Pairing code"
+        alert.informativeText =
+            "Type this on the other Mac, under Devices ▸ Enter a pairing code.\n\n"
+            + code.formatted
+            + "\n\nIt carries 128 bits of secret. Treat it like a password: anyone who sees it "
+            + "can connect until the pairing binds to a Mac, which happens the first time one "
+            + "uses it."
+        alert.addButton(withTitle: "Copy")
+        alert.addButton(withTitle: "Done")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code.formatted, forType: .string)
+        }
+        refresh()
+    }
+
+    @objc private func enterPairingCode() {
+        let alert = NSAlert()
+        alert.messageText = "Enter a pairing code"
+        alert.informativeText = "Generated by the other Mac under Devices ▸ Pair a new Mac."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.placeholderString = "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XX"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Pair")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            let code = try PairingCode.parse(field.stringValue)
+            var store = try SecretStore.load()
+            guard !store.pairings.contains(where: { Crypto.constantTimeEquals($0.psk, code.psk) })
+            else {
+                notify("Already paired", "This Mac already knows that code.")
+                return
+            }
+            store.pairings.append(Pairing(psk: code.psk, label: "Mac \(store.pairings.count + 1)"))
+            try store.save()
+            notify("Paired", "Press Start on both Macs. This one is set to: \(mode.title).")
+        } catch {
+            notify("That code was not accepted", error.localizedDescription)
+        }
+        refresh()
+    }
+
+    @objc private func forgetDevice(_ sender: NSMenuItem) {
+        guard let label = sender.representedObject as? String else { return }
+        let confirm = NSAlert()
+        confirm.messageText = "Forget this Mac?"
+        confirm.informativeText =
+            "Its key will no longer be accepted, and you will need a new pairing code to "
+            + "connect the two Macs again."
+        confirm.addButton(withTitle: "Forget")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+
+        do {
+            var store = try SecretStore.load()
+            store.pairings.removeAll { $0.label == label }
+            try store.save()
+            if isRunning { stopSession() }
+        } catch {
+            notify("Could not forget it", error.localizedDescription)
+        }
+        refresh()
+    }
+
+    // MARK: Arrangement
+
+    private func arrangementMenuItem() -> NSMenuItem {
+        let config = (try? Config.load()) ?? Config()
+        let item = NSMenuItem(title: "Screen arrangement", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+
+        submenu.addItem(disabled("The other Mac is to my…"))
+        for edge in ScreenEdge.allCases {
+            let title: String
+            switch edge {
+            case .left: title = "Left"
+            case .right: title = "Right"
+            case .top: title = "Above"
+            case .bottom: title = "Below"
+            }
+            let entry = NSMenuItem(title: title, action: #selector(selectEdge(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.state = config.edge == edge ? .on : .off
+            entry.representedObject = edge.rawValue
+            submenu.addItem(entry)
+        }
+
+        submenu.addItem(.separator())
+        submenu.addItem(disabled("When the screens are different sizes…"))
+        for alignment in ScreenAlignment.allCases {
+            let title: String
+            switch alignment {
+            case .proportional: title = "Stretch to fit (recommended)"
+            case .start: title = "Line up the tops"
+            case .center: title = "Line up the middles"
+            case .end: title = "Line up the bottoms"
+            }
+            let entry = NSMenuItem(title: title, action: #selector(selectAlignment(_:)),
+                                   keyEquivalent: "")
+            entry.target = self
+            entry.state = config.alignment == alignment ? .on : .off
+            entry.representedObject = alignment.rawValue
+            submenu.addItem(entry)
+        }
+
+        submenu.addItem(.separator())
+        submenu.addItem(action("Show arrangement…", #selector(showArrangement)))
+        item.submenu = submenu
+        return item
+    }
+
+    @objc private func selectEdge(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        applyConfig { $0.remoteEdge = raw }
+    }
+
+    @objc private func selectAlignment(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        applyConfig { $0.remoteAlignment = raw }
+    }
+
+    /// Saves a change and restarts the session, because the arrangement is read when a
+    /// session starts rather than watched while it runs.
+    private func applyConfig(_ change: (inout Config) -> Void) {
+        var config = (try? Config.load()) ?? Config()
+        change(&config)
+        try? config.save()
+        if isRunning {
+            stopSession()
+            startSession()
+        }
+        refresh()
+    }
+
+    @objc private func showArrangement() {
+        let store = (try? SecretStore.load()) ?? SecretStore()
+        let config = (try? Config.load()) ?? Config()
+
+        guard let pairing = store.pairings.first(where: { ($0.peerDisplays?.isEmpty == false) }),
+              let remote = pairing.peerDisplays,
+              let layout = ScreenLayout(localDisplays: Displays.current(), remoteDisplays: remote,
+                                        edge: config.edge, alignment: config.alignment) else {
+            notify("No arrangement yet",
+                   "Connect once and the other Mac's screens will be remembered here.")
+            return
+        }
+
+        let name = pairing.peerName ?? pairing.label
+        let alert = NSAlert()
+        alert.messageText = "\(name) is to the \(config.remoteEdge)"
+        // A proportional font would turn the diagram into noise.
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 140))
+        text.string = layout.diagram(width: 72, localName: "this Mac", remoteName: name)
+        text.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        text.isEditable = false
+        text.drawsBackground = false
+        alert.accessoryView = text
+        alert.informativeText = "# this Mac   + \(name)   ·   alignment: \(config.remoteAlignment)"
+        alert.addButton(withTitle: "Done")
+        alert.runModal()
     }
 
     private func disabled(_ title: String) -> NSMenuItem {

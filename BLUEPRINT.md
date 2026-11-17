@@ -271,6 +271,27 @@ Frames grew from 64 KiB to 4 MiB to carry a clipboard; input events are unchange
 for a mouse move. The protocol version went to 3, so a mismatched pair is refused at the
 handshake with a clear message rather than failing later as an odd frame error.
 
+#### Why the menu bar felt worse than the terminal
+
+Reported after the first version: via the menu bar the pointer lagged on the other Mac, and
+this Mac was left with a visible — though no longer moving — cursor. Both from the same binary
+that behaved perfectly when run from a shell. Three causes, none of them in the session logic:
+
+* **App Nap.** Run from a terminal, the session inherits the foreground application's
+  treatment. Run as a child of a menu-bar accessory it is just another background process, so
+  the system throttles it and coalesces its timers. `ProcessInfo.beginActivity` with
+  `.latencyCritical` opts out; that is the lag.
+* **A diagnostic left running at full tilt.** The drift sampler added while chasing the
+  two-pointers bug ran at 1 kHz, and reading the pointer is a round trip to the window server.
+  A thousand a second competes with the event tap for the very thing it is measuring. Now 50 Hz.
+* **The menu redrawing itself.** The status item was being redrawn twice a second whether or
+  not it had changed, and touching an `NSStatusItem` button makes AppKit reconsider the cursor
+  — which un-hid the cursor the session was holding hidden. It now redraws only when it would
+  look different, and the session re-asserts the hide within a frame if anything else undoes it.
+
+The third is worth keeping in mind generally: the front end and the session are different
+processes, but they share a window server, and that is enough for one to undo the other.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 

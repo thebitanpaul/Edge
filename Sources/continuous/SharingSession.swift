@@ -55,6 +55,7 @@ final class SharingSession {
     /// At 10 Hz a sampler cannot distinguish a cursor that never moved from one that a timer
     /// keeps putting back, which is how the previous diagnosis went wrong. 1 ms can.
     private var driftTimer: DispatchSourceTimer?
+    private var activity: NSObjectProtocol?
     private let holdQueue = DispatchQueue(label: "app.continuous.cursor-hold")
 
     var onModeChange: ((Mode) -> Void)?
@@ -74,6 +75,18 @@ final class SharingSession {
         }
         try tap.start()
         self.tap = tap
+
+        // Tell the system this process is latency-critical.
+        //
+        // Run from a terminal it inherits the foreground app's treatment and feels fine. Run
+        // as a child of a menu-bar accessory it is just another background process, so App Nap
+        // throttles it and coalesces its timers — which arrives as a visibly laggy pointer on
+        // the other Mac. This is the documented way to opt out, and it is the difference
+        // between the two front ends feeling the same.
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
+            reason: "forwarding keyboard and pointer input to another Mac")
+
         LocalPointer.installCrashSafety()
         // Ask for background cursor control once, up front, so a failure is reported at
         // start-up rather than discovered the first time the pointer crosses over.
@@ -89,6 +102,10 @@ final class SharingSession {
         returnToLocal(reason: "stopping")
         tap?.stop()
         tap = nil
+        if let activity {
+            ProcessInfo.processInfo.endActivity(activity)
+            self.activity = nil
+        }
     }
 
     func attach(link: SecureLink, layout: ScreenLayout?) {
@@ -150,6 +167,8 @@ final class SharingSession {
     var isRemote: Bool { lock.lock(); defer { lock.unlock() }; return router.isRemote }
 
     private var captureSummary: String { lock.lock(); defer { lock.unlock() }; return capture.summary }
+
+    private var hideAttempts: Int { lock.lock(); defer { lock.unlock() }; return capture.hideCount }
 
     /// True once the event tap is installed. It stays installed across reconnections: with no
     /// link attached it swallows nothing, so there is no reason to tear it down and risk
@@ -276,15 +295,33 @@ final class SharingSession {
     private func startWatchingDrift(from point: ScreenPoint) {
         driftTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: holdQueue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(1), leeway: .microseconds(200))
+        // 50 Hz, not the 1 kHz this started at. Reading the pointer is a round trip to the
+        // window server, and a thousand of those a second competes with the event tap for the
+        // very thing being measured. Twenty milliseconds still catches any drift worth seeing.
+        timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(4))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let live = LocalPointer.liveLocation
             let drift = abs(live.x - point.x) + abs(live.y - point.y)
+
             self.lock.lock()
             self.driftSamples += 1
             if drift > self.maxDrift { self.maxDrift = drift }
+            let shouldBeHidden = self.capture.hidden
             self.lock.unlock()
+
+            // Something else in the system can un-hide the cursor: AppKit reconsiders it in
+            // any process that touches its own interface, and the menu-bar front end is one
+            // such process sitting right there. Notice within a frame and put it back, rather
+            // than leaving a pointer parked on a screen nobody is using.
+            guard shouldBeHidden, LocalPointer.isCursorVisible == true else { return }
+            self.lock.lock()
+            LocalPointer.reassertHidden(&self.capture)
+            let total = self.capture.hideCount
+            self.lock.unlock()
+            if total == 2 || total % 50 == 0 {
+                Log.debug("something re-showed this Mac's cursor; hidden again (\(total) times)")
+            }
         }
         driftTimer = timer
         timer.resume()
@@ -344,10 +381,10 @@ final class SharingSession {
         lock.unlock()
 
         let summary = String(format: "cursor strayed at most %.0fpx over %d samples "
-                             + "(%d movements forwarded; tap %@, %@)",
+                             + "(%d movements forwarded; tap %@, %@, re-hidden %d time(s))",
                              strayed, samples, moves,
                              tap?.location == .cghidEventTap ? "HID" : "session",
-                             captureSummary)
+                             captureSummary, max(0, hideAttempts - 1))
         // Surfaced rather than buried: this is the number that says whether the second
         // cursor is still happening, and it comes from the real session rather than a
         // reconstruction of it.

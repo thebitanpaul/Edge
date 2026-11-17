@@ -79,8 +79,15 @@ no Dock icon, no window.
   round trip 1.2 ms · clipboard shared
   ─────────────────────────────
   Stop
-  Mode            ▸  Share my keyboard & mouse
-                     Lend my screen
+  Mode                 ▸  Share my keyboard & mouse
+                          Lend my screen
+  ─────────────────────────────
+  Devices              ▸  Work Mac            ▸ Forget…
+                          Pair a new Mac…
+                          Enter a pairing code…
+  Screen arrangement   ▸  Left / Right / Above / Below
+                          Stretch to fit · tops · middles · bottoms
+                          Show arrangement…
   ─────────────────────────────
   ☑ Share clipboard
   ☑ Start at login
@@ -88,6 +95,10 @@ no Dock icon, no window.
   Open log…
   Quit Continuous
 ```
+
+Pairing, forgetting a Mac and changing the arrangement are all in the menu, so the terminal is
+optional rather than required. Changing the arrangement or the clipboard setting restarts the
+session, because both are read when one starts.
 
 Pick **Mode** on each Mac — one shares its keyboard and mouse, the other lends its screen —
 and press **Start**. Everything below still works from the terminal; the menu runs the same
