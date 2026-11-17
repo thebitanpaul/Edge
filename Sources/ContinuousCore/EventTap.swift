@@ -184,37 +184,126 @@ public extension CGEvent {
     }
 }
 
-/// Local pointer state on the sending Mac while the other one has the pointer.
+/// What this Mac does with its own pointer while the other Mac has it.
 ///
-/// The documented way to freeze a Mac's cursor is `CGAssociateMouseAndMouseCursorPosition(0)`,
-/// and deleting the movement in a HID-level event tap ought to make it moot anyway. On this
-/// macOS both calls report success and the cursor moves regardless, which is how you end up
-/// with a second pointer mirroring your hand on the machine you are not using.
+/// Three calls in a specific order, and the order is the entire difficulty:
 ///
-/// So the position is enforced rather than assumed: after every movement, check where the
-/// cursor actually is and put it back if it has strayed. Reading the location costs about
-/// 0.2 µs and a correction about 38 µs, so even at a few hundred events a second this is well
-/// under one percent of a core — cheap enough to stop guessing which API is in charge.
+/// 1. **Park** the cursor where it left.
+/// 2. **Hide** it — which requires telling the window server that a background process is
+///    allowed to, or `CGDisplayHideCursor` returns success and does nothing at all.
+/// 3. **Uncouple** it from the mouse, *last*, because hiding re-couples it.
+///
+/// Doing (3) before (2) leaves the pointer coupled, so it follows your hand around a screen
+/// you are not using. That is the second cursor, and it is why `beginCapture` exists as one
+/// function rather than three calls a caller could order wrongly.
 public enum LocalPointer {
-    /// Stops the physical device from moving this Mac's own pointer.
+
+    /// Everything `beginCapture` did, so `endCapture` can undo exactly that much and the
+    /// caller can report what worked.
+    public struct CaptureState: Sendable {
+        public var backgroundControl = false
+        public var hidden = false
+        public var uncoupled = false
+        /// What the window server says, rather than what the hide call returned.
+        /// `nil` when it could not be asked.
+        public var confirmedHidden: Bool?
+        public var parkedAt = ScreenPoint(x: 0, y: 0)
+
+        public init() {}
+
+        public var summary: String {
+            let confirmation: String
+            switch confirmedHidden {
+            case .some(true):  confirmation = "cursor confirmed hidden"
+            case .some(false): confirmation = "CURSOR STILL VISIBLE"
+            case nil:          confirmation = "visibility unverifiable"
+            }
+            return "background-control \(backgroundControl ? "ok" : "unavailable"), "
+                + "hide \(hidden ? "ok" : "failed"), uncouple \(uncoupled ? "ok" : "failed"), "
+                + confirmation
+        }
+    }
+
+    // MARK: - Private window-server SPI
+
+    private typealias CGSConnectionID = Int32
+    private typealias DefaultConnectionFn = @convention(c) () -> CGSConnectionID
+    private typealias SetConnectionPropertyFn =
+        @convention(c) (CGSConnectionID, CGSConnectionID, CFString, CFTypeRef) -> CGError
+
+    /// Grants this process permission to change the cursor while it is not the frontmost app.
     ///
-    /// Only needed when the tap had to fall back to the session level. With a HID-level tap
-    /// the movement is deleted before the window server sees it, so the cursor never moves and
-    /// this is unnecessary — which is just as well, because the setting is global and a
-    /// process that died while it was off would be an unpleasant thing to debug.
+    /// `CGDisplayHideCursor` is documented to apply "while the application is active", and a
+    /// background tool never is — so it returns `kCGErrorSuccess` and the cursor stays exactly
+    /// where it was, visible. The window server exposes a connection property that lifts that
+    /// restriction. It is private, so it is resolved at runtime and treated as optional:
+    /// without it the pointer is still uncoupled and still stops moving, it is merely visible.
     @discardableResult
-    public static func detachFromHardware() -> Bool {
-        let result = CGAssociateMouseAndMouseCursorPosition(0)
-        if result != .success { Log.warn("could not detach the pointer from the hardware (\(result.rawValue))") }
+    public static func enableBackgroundCursorControl() -> Bool {
+        guard let handle = dlopen(nil, RTLD_LAZY),
+              let connectionSymbol = dlsym(handle, "_CGSDefaultConnection"),
+              let propertySymbol = dlsym(handle, "CGSSetConnectionProperty") else {
+            Log.debug("window-server cursor SPI unavailable; the local cursor will stay visible")
+            return false
+        }
+        let connection = unsafeBitCast(connectionSymbol, to: DefaultConnectionFn.self)()
+        let setProperty = unsafeBitCast(propertySymbol, to: SetConnectionPropertyFn.self)
+        let result = setProperty(connection, connection,
+                                 "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+        if result != .success {
+            Log.debug("SetsCursorInBackground refused (\(result.rawValue))")
+        }
         return result == .success
     }
 
-    @discardableResult
-    public static func reattachToHardware() -> Bool {
-        let result = CGAssociateMouseAndMouseCursorPosition(1)
-        if result != .success { Log.error("could not re-attach the pointer to the hardware (\(result.rawValue))") }
-        return result == .success
+    private typealias CursorIsVisibleFn = @convention(c) () -> boolean_t
+
+    /// Whether the window server currently considers the cursor visible.
+    ///
+    /// Withdrawn from the SDK years ago but still present in CoreGraphics, and the only way
+    /// to tell a hide that worked from a hide that returned success and did nothing — which
+    /// is the difference between one pointer and two. `nil` if it cannot be resolved.
+    public static var isCursorVisible: Bool? {
+        guard let handle = dlopen(nil, RTLD_LAZY),
+              let symbol = dlsym(handle, "CGCursorIsVisible") else { return nil }
+        return unsafeBitCast(symbol, to: CursorIsVisibleFn.self)() != 0
     }
+
+    // MARK: - Capture
+
+    public static func beginCapture(parkingAt point: ScreenPoint) -> CaptureState {
+        var state = CaptureState()
+        state.parkedAt = point
+
+        allowEventsDuringWarps()
+        warp(to: point)
+
+        state.backgroundControl = enableBackgroundCursorControl()
+        state.hidden = CGDisplayHideCursor(CGMainDisplayID()) == .success
+
+        // Last, deliberately: hiding the cursor re-couples it to the mouse.
+        state.uncoupled = CGAssociateMouseAndMouseCursorPosition(0) == .success
+
+        // `CGDisplayHideCursor` reports success whether or not it was allowed to do
+        // anything, so believe the window server rather than the return code.
+        state.confirmedHidden = isCursorVisible.map { !$0 }
+        return state
+    }
+
+    public static func endCapture(_ state: CaptureState, restoringTo point: ScreenPoint?) {
+        if state.hidden {
+            enableBackgroundCursorControl()
+            if CGDisplayShowCursor(CGMainDisplayID()) != .success {
+                Log.error("could not show the cursor again")
+            }
+        }
+        if CGAssociateMouseAndMouseCursorPosition(1) != .success {
+            Log.error("could not re-couple the pointer to the mouse")
+        }
+        if let point { warp(to: point) }
+    }
+
+    // MARK: - Pieces
 
     public static func warp(to point: ScreenPoint) {
         CGWarpMouseCursorPosition(CGPoint(x: point.x, y: point.y))
@@ -238,43 +327,25 @@ public enum LocalPointer {
         return ScreenPoint(x: Double(p.x), y: Double(height - p.y))
     }
 
-    /// Puts the cursor at `point`, unconditionally.
-    ///
-    /// Unconditionally, because asking where the cursor is first does not work here. The
-    /// position reported to this process only advances when a movement event is delivered to
-    /// it — and while the pointer is on the other Mac we delete every one of those. So the
-    /// cursor visibly moves while `location` keeps returning the spot we parked it in, a
-    /// conditional correction concludes there is nothing to correct, and a second pointer
-    /// wanders the screen. Warping costs 38 µs; checking first costs correctness.
+    /// Puts the cursor back at `point` and re-uncouples it. Only used by the optional
+    /// re-parking timer; the capture itself should make it unnecessary.
     public static func hold(at point: ScreenPoint) {
         CGWarpMouseCursorPosition(CGPoint(x: point.x, y: point.y))
-        // Warping re-couples the cursor to the hardware, so the detach has to be renewed
-        // or the next movement is free again.
         CGAssociateMouseAndMouseCursorPosition(0)
     }
 
-    /// Corrects the cursor only if it *appears* to have moved.
-    ///
-    /// Only trustworthy when movement events are reaching this process — which is to say, in
-    /// diagnostics rather than in a live session. Returns whether it corrected anything.
     @discardableResult
-    public static func pin(to point: ScreenPoint, tolerance: Double = 0.5) -> Bool {
-        let now = location
-        guard abs(now.x - point.x) > tolerance || abs(now.y - point.y) > tolerance else {
-            return false
-        }
-        hold(at: point)
-        return true
+    public static func reattachToHardware() -> Bool {
+        CGAssociateMouseAndMouseCursorPosition(1) == .success
     }
 
     /// Removes the quarter-second deafness that normally follows a warp.
     ///
-    /// Without this, pinning the cursor would suppress the very hardware events we are trying
-    /// to forward — the other Mac's pointer would stutter to a halt the moment this Mac's
-    /// cursor needed correcting.
+    /// Without this, parking the cursor would suppress the very hardware events we are trying
+    /// to forward — the other Mac's pointer would stutter to a halt just after arriving.
     public static func allowEventsDuringWarps() {
         guard let source = CGEventSource(stateID: .combinedSessionState) else {
-            Log.warn("could not open the session event source; pinning may suppress input")
+            Log.warn("could not open the session event source; parking may suppress input")
             return
         }
         source.localEventsSuppressionInterval = 0
@@ -283,44 +354,16 @@ public enum LocalPointer {
             state: .eventSuppressionStateSuppressionInterval)
     }
 
-    /// Hides the cursor on every display.
-    ///
-    /// `CGDisplayHideCursor` is reference counted per process and historically only takes
-    /// effect for the frontmost application, so a background tool may well be refused. That is
-    /// survivable — a stationary cursor parked at the screen edge is a reasonable thing to
-    /// leave behind — so the result is reported rather than treated as fatal.
-    @discardableResult
-    public static func hide() -> Bool {
-        var hidAny = false
-        for id in activeDisplayIDs() where CGDisplayHideCursor(id) == .success {
-            hidAny = true
-        }
-        return hidAny
-    }
-
-    @discardableResult
-    public static func show() -> Bool {
-        var shown = false
-        for id in activeDisplayIDs() where CGDisplayShowCursor(id) == .success {
-            shown = true
-        }
-        return shown
-    }
-
     private static var crashSafetyInstalled = false
 
     /// Re-couples the pointer and un-hides the cursor if this process exits unexpectedly.
-    ///
-    /// Detaching the pointer is a window-server setting, not a property of this process, so a
-    /// crash at the wrong moment could in principle leave the Mac with a cursor that does not
-    /// follow the mouse. `atexit` does not cover every way a process can die, but it covers
-    /// the ones that are survivable at all.
     public static func installCrashSafety() {
         guard !crashSafetyInstalled else { return }
         crashSafetyInstalled = true
         atexit {
-            CGAssociateMouseAndMouseCursorPosition(1)
+            _ = LocalPointer.enableBackgroundCursorControl()
             CGDisplayShowCursor(CGMainDisplayID())
+            CGAssociateMouseAndMouseCursorPosition(1)
         }
     }
 

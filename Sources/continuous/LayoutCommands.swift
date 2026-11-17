@@ -279,106 +279,34 @@ extension Commands {
 
         tap.stop()
         out()
-        try checkPinningHoldsTheCursor(injector: injector)
-        try checkSwallowingStopsTheLocalCursor()
-    }
 
-    /// Checks the mechanism that actually holds this Mac's cursor still.
-    ///
-    /// Unlike swallowing, this one *can* be tested with synthetic events: pinning reads the
-    /// real cursor position and corrects it, so it does not matter how the cursor came to
-    /// move. That makes it the part of the fix that can be checked without a second Mac.
-    private static func checkPinningHoldsTheCursor(injector: EventInjector) throws {
-        let park = Displays.pointerLocation
-        let main = Displays.current().first(where: \.isMain)?.rect
-            ?? ScreenRect(x: 0, y: 0, width: 800, height: 600)
-        let stray = ScreenPoint(x: main.midX + 180, y: main.midY + 110)
+        // Hiding the cursor is the half of "one pointer" that can be checked without a
+        // second Mac: ask the window server whether the cursor actually went away, rather
+        // than trusting a call that reports success either way.
+        let park = LocalPointer.liveLocation
+        let capture = LocalPointer.beginCapture(parkingAt: park)
+        Thread.sleep(forTimeInterval: 0.25)
+        let visibleDuring = LocalPointer.isCursorVisible
+        LocalPointer.endCapture(capture, restoringTo: park)
+        Thread.sleep(forTimeInterval: 0.15)
+        let visibleAfter = LocalPointer.isCursorVisible
 
-        info("checking the cursor can be held in place…")
-        LocalPointer.allowEventsDuringWarps()
-
-        var corrections = 0
-        for _ in 0..<12 {
-            injector.move(to: stray)
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.004))
-            if LocalPointer.pin(to: park) { corrections += 1 }
+        out(Style.bold("Hiding this Mac's cursor"))
+        out("    \(capture.summary)")
+        switch (visibleDuring, visibleAfter) {
+        case (.some(false), .some(true)):
+            ok("cursor went away while captured and came back afterwards")
+        case (.some(true), _):
+            bad("cursor stayed visible — a second pointer will be visible on this Mac")
+            out(Style.dim("    The window server refused to let a background process hide it."))
+        case (.some(false), .some(false)):
+            bad("cursor did not come back — run `continuous cursor-doctor` to restore it")
+        default:
+            warn("could not ask the window server whether the cursor is visible")
         }
-        LocalPointer.reattachToHardware()
-
-        let ended = Displays.pointerLocation
-        let drift = abs(ended.x - park.x) + abs(ended.y - park.y)
-        guard corrections > 0 else {
-            bad("the cursor never moved, so pinning could not be exercised")
-            throw ExitSilently(code: 1)
-        }
-        if drift < 2 {
-            ok("cursor pinned at \(park) through \(corrections) attempts to move it \(Int(abs(stray.x - park.x)))px away")
-        } else {
-            bad("cursor ended at \(ended), \(Int(drift))px from where it was pinned")
-            LocalPointer.warp(to: park)
-            throw ExitSilently(code: 1)
-        }
-    }
-
-    /// Checks that swallowed movement cannot drag this Mac's cursor along.
-    ///
-    /// This has to use *real* hardware movement. Synthetic events carry an absolute position
-    /// and move the cursor as they are posted, whether or not a tap deletes them, so driving
-    /// this check with injected events would pass or fail for reasons that have nothing to do
-    /// with the behaviour being tested.
-    private static func checkSwallowingStopsTheLocalCursor() throws {
-        guard isatty(STDIN_FILENO) == 1 else {
-            info("skipping the local-cursor check: it needs you to move the mouse")
-            return
-        }
-
-        let swallowed = Box<Int>(0)
-        let tap = EventTap { type, event in
-            switch type {
-            case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-                swallowed.mutate { $0 += 1 }
-                return nil          // exactly what happens while the pointer is on the other Mac
-            default:
-                return event
-            }
-        }
-        try tap.start()
-        defer { tap.stop() }
-
-        let level = tap.location == .cghidEventTap ? "HID" : "session"
-        LocalPointer.detachFromHardware()
-        defer { LocalPointer.reattachToHardware() }
-
-        let start = Displays.pointerLocation
         out()
-        warn("move your mouse around for the next 4 seconds — the cursor should NOT move")
-        info("(this is what the other Mac having the pointer feels like; tap level: \(level))")
-
-        let deadline = Date().addingTimeInterval(4)
-        while Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
-        }
-
-        let ended = Displays.pointerLocation
-        let drift = abs(ended.x - start.x) + abs(ended.y - start.y)
-        out()
-
-        guard swallowed.value > 0 else {
-            warn("no movement arrived — did the mouse actually move? skipping this check")
-            return
-        }
-
-        if drift < 4 {
-            ok("cursor held still at \(start) while \(swallowed.value) movements were swallowed")
-            info("no second pointer will trail along on this Mac")
-        } else {
-            bad("cursor drifted \(Int(drift))px to \(ended) despite swallowing \(swallowed.value) movements")
-            out(Style.dim("    That is the two-pointers symptom. The tap is at the \(level) level"))
-            out(Style.dim("    and the pointer was detached from the hardware; if both are true and"))
-            out(Style.dim("    the cursor still moves, please report it with this output."))
-            LocalPointer.warp(to: start)
-            throw ExitSilently(code: 1)
-        }
+        info("whether it stays *put* while the pointer is away is a separate question:")
+        info("run `continuous cursor-doctor`.")
     }
 
     // MARK: - remote-test

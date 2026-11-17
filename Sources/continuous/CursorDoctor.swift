@@ -106,12 +106,9 @@ extension Commands {
                 bad(error.localizedDescription); explainCapturePermissions(); throw ExitSilently(code: 1)
             }
 
-            LocalPointer.allowEventsDuringWarps()
             park.value = LocalPointer.liveLocation
-            LocalPointer.warp(to: park.value)
-            let detached = LocalPointer.detachFromHardware()
-            let hidden = LocalPointer.hide()
-            out("    tap \(tap.location == .cghidEventTap ? "HID" : "session") · detach \(detached ? "ok" : "FAILED") · hide \(hidden ? "ok" : "FAILED") · parked at \(park.value)")
+            let capture = LocalPointer.beginCapture(parkingAt: park.value)
+            out("    tap \(tap.location == .cghidEventTap ? "HID" : "session") · \(capture.summary) · parked at \(park.value)")
 
             let queue = DispatchQueue(label: "app.continuous.doctor")
             let parked = park.value
@@ -145,10 +142,8 @@ extension Commands {
 
             sampler.cancel()
             holdTimer?.cancel()
-            LocalPointer.reattachToHardware()
-            if hidden { LocalPointer.show() }
             tap.stop()
-            LocalPointer.warp(to: parked)
+            LocalPointer.endCapture(capture, restoringTo: parked)
 
             out(String(format: "    %d movements deleted · strayed at most %.0fpx · %d samples",
                        swallowed.value, drift.value, samples.value))

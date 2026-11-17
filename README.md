@@ -210,6 +210,10 @@ If you ever see a second pointer mirroring your hand on the Mac you are *not* us
 re-parking on a timer, and deleting plus warping from inside the tap callback — samples the
 cursor every millisecond, and prints the three numbers side by side.
 
+`continuous capture-test` answers the simpler half: it asks the window server whether this
+Mac's cursor actually went away, rather than trusting `CGDisplayHideCursor`, which returns
+success whether or not it was allowed to do anything.
+
 `continuous --version` reports the exact commit the bundle was built from, so there is never
 any doubt about which code produced a result.
 

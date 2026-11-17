@@ -239,11 +239,10 @@ public struct Config: Codable, Sendable {
     public var edgePressure: Double = 24
     /// Re-park this Mac's cursor on a timer while the pointer is on the other Mac.
     ///
-    /// On by default. Deleting the movement in the event tap is supposed to be enough, and
-    /// measuring whether it is has been unreliable — a 10 ms sampler cannot tell "the cursor
-    /// never moved" from "a timer kept putting it back". So the timer stays, and it runs on
-    /// its own queue: the harm was only ever in doing this from inside the tap callback.
-    public var holdLocalPointer: Bool = true
+    /// Off by default. Uncoupling the pointer from the mouse already stops the cursor
+    /// moving, and once it is genuinely hidden a stray pixel or two cannot be seen anyway.
+    /// Kept as an escape hatch; the session measures drift either way and will say so.
+    public var holdLocalPointer: Bool = false
     public var logLevel: String = "info"
 
     public init() {}
@@ -271,7 +270,7 @@ public struct Config: Codable, Sendable {
         remoteEdge = try c.decodeIfPresent(String.self, forKey: .remoteEdge) ?? "right"
         remoteAlignment = try c.decodeIfPresent(String.self, forKey: .remoteAlignment) ?? "proportional"
         edgePressure = max(1, try c.decodeIfPresent(Double.self, forKey: .edgePressure) ?? 24)
-        holdLocalPointer = try c.decodeIfPresent(Bool.self, forKey: .holdLocalPointer) ?? true
+        holdLocalPointer = try c.decodeIfPresent(Bool.self, forKey: .holdLocalPointer) ?? false
         logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? "info"
     }
 

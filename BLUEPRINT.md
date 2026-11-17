@@ -216,19 +216,31 @@ sufficient on its own. It was not a sound conclusion: that run also had an 8 ms 
 timer going, and sampled the cursor every 10 ms. A sampler slower than the thing it measures
 can only report success. The timer was doing the work and the sampler could not see it.
 
-**Attempt 5 — fix the measurement first.** Sampling now runs at 1 ms on its own queue, and
-`cursor-doctor` runs three trials that differ only in how the cursor is held: deleted events
-alone, deleted plus a background re-parking timer, and deleted plus a warp issued from inside
-the tap callback. Three numbers, one run, no argument about which mechanism is responsible.
+**Attempt 5 — read someone else's working implementation.** Deskflow has solved this, so the
+question became what it does that this did not. Two things, neither of which was going to be
+arrived at by reasoning about the documented API.
 
-The one conclusion that does survive is about *where* the work may be done. The tap callback
-runs inside the window server's event pipeline; calling synchronously back into it while
-holding one of its events lets events slip through undeleted. So the callback deletes the event
-and returns, and any re-parking happens on its own queue, where it cannot interfere.
+First: **`CGDisplayHideCursor` does nothing for a background process.** It is documented to
+apply "while the application is active", and a command-line tool never is. It returns
+`kCGErrorSuccess` regardless. The window server has a private connection property,
+`SetsCursorInBackground`, that lifts the restriction; set it and the call starts working.
+So for four attempts this Mac's cursor was never hidden at all, and the argument about whether
+it was *moving* was beside the point — there was always a second pointer on screen.
 
-The lesson, recorded because it was expensive: four fixes, three reasoned from documentation
-and one from a diagnostic that was quietly measuring the wrong thing. Instruments need
-validating before conclusions are drawn from them — a check that cannot fail is not a check.
+Second: **hiding the cursor re-couples it to the mouse.** Deskflow's `leave()` carries a
+comment saying the uncoupling must come after the hide for exactly this reason. This code did
+it the other way round, so the uncoupling was undone immediately afterwards and the cursor
+followed the hand.
+
+Both are now in one function, `LocalPointer.beginCapture`, because the ordering is the whole
+difficulty and three separate calls is three chances to get it wrong. And because
+`CGDisplayHideCursor` lies about what it did, the capture asks the window server afterwards —
+via `CGCursorIsVisible`, withdrawn from the SDK but still present — and reports
+`cursor confirmed hidden` or `CURSOR STILL VISIBLE`. `continuous capture-test` prints it.
+
+The lesson, recorded because it was expensive: five attempts, four of them reasoned from
+documentation and measurements, against an API that reports success for work it did not do.
+The thing that settled it was half an hour reading an implementation that already worked.
 
 **Also fixed:** a drag towards the far edge used to hand the pointer over mid-drag, stranding
 whatever you were moving. Crossing is now blocked while any mouse button is held.

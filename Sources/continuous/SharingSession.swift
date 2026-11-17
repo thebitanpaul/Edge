@@ -38,8 +38,7 @@ final class SharingSession {
     /// value type with its own tests.
     private var router = PointerRouter()
     private var lastHeardFrom = Date()
-    private var cursorHidden = false
-    private var pointerDetached = false
+    private var capture = LocalPointer.CaptureState()
     private var forwarded = 0
     /// Where this Mac's cursor was parked when the pointer left.
     private var parkedAt: ScreenPoint?
@@ -76,6 +75,12 @@ final class SharingSession {
         try tap.start()
         self.tap = tap
         LocalPointer.installCrashSafety()
+        // Ask for background cursor control once, up front, so a failure is reported at
+        // start-up rather than discovered the first time the pointer crosses over.
+        if !LocalPointer.enableBackgroundCursorControl() {
+            Log.warn("this Mac will not let a background process hide the cursor; "
+                     + "it will stay visible (but still) while the pointer is away")
+        }
         // Must happen before the first correction, or each one would deafen us for 250 ms.
         LocalPointer.allowEventsDuringWarps()
     }
@@ -143,6 +148,8 @@ final class SharingSession {
     }
 
     var isRemote: Bool { lock.lock(); defer { lock.unlock() }; return router.isRemote }
+
+    private var captureSummary: String { lock.lock(); defer { lock.unlock() }; return capture.summary }
 
     /// True once the event tap is installed. It stays installed across reconnections: with no
     /// link attached it swallows nothing, so there is no reason to tear it down and risk
@@ -243,20 +250,17 @@ final class SharingSession {
 
         link.send(.enterScreen(x: Int32(entry.x), y: Int32(entry.y), flags: flags))
 
-        // Stop the hardware from moving our own pointer; deltas still reach the tap.
-        // Order matters here. Park the cursor first, *then* detach it from the hardware:
-        // warping is documented to re-couple them, so detaching first and warping second
-        // silently undoes the detach — which is one way to end up with a second pointer
-        // sliding around this Mac while the real one is on the other.
-        LocalPointer.warp(to: departure)
-        pointerDetached = LocalPointer.detachFromHardware()
-        cursorHidden = LocalPointer.hide()
+        // One call, because the order inside it is the thing that was wrong for four
+        // attempts: park, then hide, then uncouple — hiding re-couples the pointer, so
+        // uncoupling has to come last.
+        capture = LocalPointer.beginCapture(parkingAt: departure)
         lock.lock(); parkedAt = departure; driftCorrections = 0; maxDrift = 0; lock.unlock()
         startHolding(at: departure)
         startWatchingDrift(from: departure)
-        Log.debug("pointer left this Mac at \(departure) → arrived at \(entry) on the other")
-        if !cursorHidden {
-            Log.debug("could not hide the local cursor; it will sit parked at the edge instead")
+        Log.debug("pointer left this Mac at \(departure) → arrived at \(entry) on the other "
+                  + "(\(capture.summary))")
+        if !capture.hidden {
+            Log.warn("could not hide this Mac's cursor; it will sit parked at the edge instead")
         }
 
         onModeChange?(.remote)
@@ -323,9 +327,8 @@ final class SharingSession {
         stopWatchingDrift()
         link?.send(.leaveScreen)
 
-        if pointerDetached { LocalPointer.reattachToHardware(); pointerDetached = false }
-        if cursorHidden { LocalPointer.show(); cursorHidden = false }
-        if let destination { LocalPointer.warp(to: destination) }
+        LocalPointer.endCapture(capture, restoringTo: destination)
+        capture = LocalPointer.CaptureState()
         lock.lock()
         parkedAt = nil
         let corrections = driftCorrections
@@ -341,12 +344,10 @@ final class SharingSession {
         lock.unlock()
 
         let summary = String(format: "cursor strayed at most %.0fpx over %d samples "
-                             + "(%d movements forwarded; tap %@, detach %@, hide %@, hold timer %@)",
+                             + "(%d movements forwarded; tap %@, %@)",
                              strayed, samples, moves,
                              tap?.location == .cghidEventTap ? "HID" : "session",
-                             pointerDetached ? "ok" : "failed",
-                             cursorHidden ? "ok" : "failed",
-                             config.holdLocalPointer ? "on" : "off")
+                             captureSummary)
         // Surfaced rather than buried: this is the number that says whether the second
         // cursor is still happening, and it comes from the real session rather than a
         // reconstruction of it.
