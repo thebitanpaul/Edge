@@ -2,6 +2,43 @@ import Foundation
 import Network
 import ContinuousCore
 
+/// Restarts a listener when the pairings on disk change.
+///
+/// The keys a listener will accept are fixed when its TLS parameters are built, so a session
+/// that was already running when you paired a new Mac keeps offering the old key set and
+/// turns the new one away with `errSSLUnknownPSKIdentity`. From the outside that looks like a
+/// mistyped pairing code — the one explanation it is not — and no amount of re-pairing fixes
+/// it, because the problem is on the side that is not being re-paired.
+final class PairingWatcher {
+    private var lastSeen: Date?
+    private let onChange: () -> Void
+    private var timer: DispatchSourceTimer?
+
+    init(onChange: @escaping () -> Void) {
+        self.lastSeen = SecretStore.lastChanged
+        self.onChange = onChange
+    }
+
+    func start() {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "app.continuous.pairings"))
+        timer.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(500))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let current = SecretStore.lastChanged
+            guard current != self.lastSeen else { return }
+            self.lastSeen = current
+            DispatchQueue.main.async { self.onChange() }
+        }
+        self.timer = timer
+        timer.resume()
+    }
+
+    func stop() {
+        timer?.cancel()
+        timer = nil
+    }
+}
+
 extension Commands {
 
     // MARK: - listen  (the Mac lending its screen)
@@ -133,7 +170,27 @@ extension Commands {
         try listener.start()
         session.startWatchingDisplays()
         Runtime.installSignalHandlers()
-        Runtime.runUntilInterrupted()
+
+        // Noticing a new pairing matters more than it sounds: without it, a session that was
+        // running when you paired keeps refusing the new key for ever.
+        var pairingsChanged = false
+        let watcher = PairingWatcher { pairingsChanged = true }
+        watcher.start()
+
+        Runtime.run(while: { !Runtime.interrupted && !pairingsChanged })
+        watcher.stop()
+
+        if pairingsChanged && !Runtime.interrupted {
+            out()
+            info("the pairings changed — restarting so the new key is accepted")
+            session.detach()
+            session.stopWatchingDisplays()
+            listener.stop()
+            RuntimeState.clear(.listening)
+            // Give the port a moment to come free before binding it again.
+            Thread.sleep(forTimeInterval: 0.4)
+            return try listen(args)
+        }
 
         out()
         info("shutting down")
@@ -231,6 +288,7 @@ extension Commands {
                                         store: directory.snapshot,
                                         config: config,
                                         explicitPairing: args.string("pair"),
+                                        localDeviceID: identity.deviceID,
                                         attempt: attempt)
         } catch {
             // Not being able to find the other Mac is nearly always "it is not listening

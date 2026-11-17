@@ -17,13 +17,15 @@ enum Target {
     }
 
     static func resolve(argument: String?, store: SecretStore, config: Config,
-                        explicitPairing: String?, attempt: Int = 1) throws -> Resolved {
+                        explicitPairing: String?, localDeviceID: DeviceID? = nil,
+                        attempt: Int = 1) throws -> Resolved {
         guard !store.pairings.isEmpty else { throw ContinuousError.notPaired }
 
         // 1. An explicit --pair always wins.
         if let needle = explicitPairing {
             let pairing = store.pairings[try store.index(matching: needle)]
-            let endpoint = try locate(pairing, argument: argument, config: config, attempt: attempt)
+            let endpoint = try locate(pairing, argument: argument, config: config,
+                                      localDeviceID: localDeviceID, attempt: attempt)
             return Resolved(pairing: pairing, endpoint: endpoint.0, via: endpoint.1)
         }
 
@@ -35,14 +37,16 @@ enum Target {
                     + store.pairings.map { "continuous connect \"\($0.label)\"" }.joined(separator: "\n    "))
             }
             let pairing = store.pairings[0]
-            let endpoint = try locate(pairing, argument: nil, config: config, attempt: attempt)
+            let endpoint = try locate(pairing, argument: nil, config: config,
+                                      localDeviceID: localDeviceID, attempt: attempt)
             return Resolved(pairing: pairing, endpoint: endpoint.0, via: endpoint.1)
         }
 
         // 3. The argument names a pairing on this Mac.
         if let index = try? store.index(matching: argument) {
             let pairing = store.pairings[index]
-            let endpoint = try locate(pairing, argument: nil, config: config, attempt: attempt)
+            let endpoint = try locate(pairing, argument: nil, config: config,
+                                      localDeviceID: localDeviceID, attempt: attempt)
             return Resolved(pairing: pairing, endpoint: endpoint.0, via: endpoint.1)
         }
 
@@ -53,13 +57,14 @@ enum Target {
                 + "  Say which key to use:  continuous connect \(argument) --pair <label>")
         }
         let pairing = store.pairings[0]
-        let endpoint = try locate(pairing, argument: argument, config: config, attempt: attempt)
+        let endpoint = try locate(pairing, argument: argument, config: config,
+                                  localDeviceID: localDeviceID, attempt: attempt)
         return Resolved(pairing: pairing, endpoint: endpoint.0, via: endpoint.1)
     }
 
     /// Finds the address for a pairing, preferring live discovery over remembered state.
-    private static func locate(_ pairing: Pairing, argument: String?,
-                               config: Config, attempt: Int) throws -> (NWEndpoint, String) {
+    private static func locate(_ pairing: Pairing, argument: String?, config: Config,
+                               localDeviceID: DeviceID?, attempt: Int) throws -> (NWEndpoint, String) {
         // An explicit address or Bonjour name in the argument takes precedence.
         if let argument, !argument.isEmpty {
             if looksLikeAddress(argument) {
@@ -86,14 +91,32 @@ enum Target {
                     "the address you set")
         }
 
-        // Otherwise find the Mac this pairing is pinned to. Three ways, in order of how much
-        // they can tell us apart from how reliable they are.
-        if let deviceID = pairing.peerDeviceID {
-            info("looking for \(pairing.peerName ?? pairing.label) [\(deviceID.short)]…")
-            if let hit = Discovery.first(matching: { $0.deviceID == deviceID }, timeout: 3) {
-                return (hit.endpoint, "Bonjour, matched on device id")
-            }
-            Log.debug("Bonjour browsing found nothing — it is blocked on many managed networks")
+        // Otherwise look for it on the network.
+        //
+        // Note what is *not* required here: a peer device id. A pairing that has never
+        // connected does not have one — it is learned from the first handshake — so gating
+        // discovery on it meant a fresh pairing could never be found, however well Bonjour
+        // was working. That is safe to drop because discovery is not a trust boundary: a Mac
+        // that does not hold the pairing key cannot finish the TLS handshake.
+        if pairing.peerDeviceID != nil {
+            info("looking for \(pairing.peerName ?? pairing.label)…")
+        } else {
+            info("looking for any Mac running Continuous…")
+        }
+        let seen = Discovery.scan(duration: 3)
+        if let hit = PeerSelection.choose(from: seen,
+                                          boundTo: pairing.peerDeviceID,
+                                          excluding: localDeviceID,
+                                          attempt: attempt) {
+            let how = pairing.peerDeviceID == nil
+                ? "Bonjour, \"\(hit.serviceName)\""
+                : "Bonjour, matched on device id"
+            return (hit.endpoint, how)
+        }
+        if seen.isEmpty {
+            Log.debug("nothing advertising — Bonjour is blocked on many managed networks")
+        } else {
+            Log.debug("\(seen.count) Mac(s) advertising, none matching this pairing")
         }
 
         // mDNS *name* resolution usually survives where browsing does not, because it is an

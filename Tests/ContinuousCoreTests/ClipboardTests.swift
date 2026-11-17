@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import AppKit
+import Network
 @testable import ContinuousCore
 
 @Suite("Clipboard")
@@ -243,5 +244,67 @@ struct ShortPairingCodeTests {
         // handshake; 2^80 is not a thing anyone is doing to borrow a keyboard.
         #expect(PairingCode.secretBytes * 8 == 80)
         #expect(Set((0..<200).map { _ in PairingCode.generate().secret }).count == 200)
+    }
+}
+
+@Suite("Choosing which Mac to dial")
+struct PeerSelectionTests {
+    private func peer(_ name: String, _ id: DeviceID?) -> DiscoveredPeer {
+        DiscoveredPeer(serviceName: name, deviceID: id, role: "client",
+                       endpoint: .hostPort(host: NWEndpoint.Host("\(name).local"), port: 52777))
+    }
+
+    /// The bug this exists for: a pairing that has never connected has no peer device id,
+    /// because the id is learned *from* the first handshake. Matching on one could only fail,
+    /// so a fresh pairing could never be found however well Bonjour was working.
+    @Test("an unbound pairing dials whatever is advertising")
+    func unboundUsesAnything() {
+        let found = [peer("NAV-LT-0416", DeviceID())]
+        let chosen = PeerSelection.choose(from: found, boundTo: nil, excluding: DeviceID())
+        #expect(chosen?.serviceName == "NAV-LT-0416")
+    }
+
+    @Test("a bound pairing dials only the Mac it is pinned to")
+    func boundIsStrict() {
+        let wanted = DeviceID()
+        let found = [peer("Someone Else", DeviceID()), peer("Work Mac", wanted)]
+        #expect(PeerSelection.choose(from: found, boundTo: wanted, excluding: nil)?
+                    .serviceName == "Work Mac")
+        // Pinned to a Mac that is not here: dial nothing rather than the wrong one.
+        #expect(PeerSelection.choose(from: [peer("Someone Else", DeviceID())],
+                                     boundTo: wanted, excluding: nil) == nil)
+    }
+
+    /// A Mac that both advertises and dials would otherwise find its own service.
+    @Test("never dials itself")
+    func excludesSelf() {
+        let me = DeviceID()
+        #expect(PeerSelection.choose(from: [peer("Me", me)], boundTo: nil, excluding: me) == nil)
+
+        let other = DeviceID()
+        let chosen = PeerSelection.choose(from: [peer("Me", me), peer("Them", other)],
+                                          boundTo: nil, excluding: me)
+        #expect(chosen?.serviceName == "Them")
+    }
+
+    @Test("several unknown Macs each get a turn")
+    func rotatesCandidates() {
+        let found = [peer("A", DeviceID()), peer("B", DeviceID()), peer("C", DeviceID())]
+        let names = (1...6).map {
+            PeerSelection.choose(from: found, boundTo: nil, excluding: nil, attempt: $0)?.serviceName
+        }
+        #expect(names == ["A", "B", "C", "A", "B", "C"])
+    }
+
+    @Test("nothing advertising means nothing chosen")
+    func emptyIsNil() {
+        #expect(PeerSelection.choose(from: [], boundTo: nil, excluding: DeviceID()) == nil)
+    }
+
+    @Test("a peer with no device id in its advert is still dialable when unbound")
+    func missingIdStillUsable() {
+        let chosen = PeerSelection.choose(from: [peer("Mystery", nil)],
+                                          boundTo: nil, excluding: DeviceID())
+        #expect(chosen?.serviceName == "Mystery")
     }
 }

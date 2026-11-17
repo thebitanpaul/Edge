@@ -393,6 +393,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
+    /// A running session reads the keys it will accept when it starts, so a pairing change
+    /// means nothing to it until it is restarted. Leaving that to the user produced a failure
+    /// that looks exactly like a mistyped code and cannot be fixed by re-typing it.
+    private func restartForPairingChange() {
+        guard isRunning else { return }
+        stopSession()
+        startSession()
+    }
+
     @objc private func renameDevice(_ sender: NSMenuItem) {
         guard let label = sender.representedObject as? String else { return }
         let store = (try? SecretStore.load()) ?? SecretStore()
@@ -469,6 +478,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         let key = ((try? SecretStore.load()) ?? SecretStore()).pairings.last
             .map { String($0.keyIDHex.prefix(8)) } ?? "?"
+        restartForPairingChange()
         notify("Now the other Mac",
                "Enter that code there, set it to the opposite role, and press Start on both.\n\n"
                + "Both Macs should then show key \(key) under Devices. If they do, the pairing "
@@ -500,6 +510,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             store.pairings.append(Pairing(psk: code.psk, label: Self.freshLabel(in: store)))
             try store.save()
             let key = String((store.pairings.last?.keyIDHex ?? "").prefix(8))
+            restartForPairingChange()
             notify("Paired — key \(key)",
                    "Check the other Mac shows the same key under Devices; if it does, the "
                    + "code was typed correctly.\n\nThis Mac is set to: \(mode.title). The "

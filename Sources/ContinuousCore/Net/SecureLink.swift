@@ -123,9 +123,18 @@ public final class SecureLink {
     /// NWError's default description is unhelpful for the two failures users actually hit.
     private func explain(_ error: NWError) -> String {
         if case .tls(let status) = error {
-            // -9800..-9849 is the Secure Transport range; a PSK mismatch surfaces as a
-            // handshake/decrypt failure rather than anything explicitly key-shaped.
-            return "TLS handshake failed (OSStatus \(status)) — the two Macs almost certainly do not share the same pairing code"
+            // -9864 is errSSLUnknownPSKIdentity, and it is worth naming precisely: it means
+            // the other Mac has no key matching the one offered. The commonest cause is not a
+            // mistyped code but a listener that was started before the pairing was created
+            // and is still holding the key set it read at start-up.
+            if status == -9864 {
+                return "the other Mac does not recognise this pairing key.\n"
+                    + "  · if it was already running when you paired, restart it over there —\n"
+                    + "    a session reads the keys it will accept when it starts\n"
+                    + "  · otherwise the two Macs were paired with different codes; compare the\n"
+                    + "    key shown by `continuous troubleshoot` on each"
+            }
+            return "TLS handshake failed (OSStatus \(status)) — the two Macs may not share the same pairing code"
         }
         if case .posix(let code) = error {
             switch code {

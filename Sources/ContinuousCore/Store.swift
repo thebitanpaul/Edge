@@ -117,6 +117,12 @@ public struct SecretStore: Codable, Sendable {
 
     // MARK: persistence
 
+    /// When the pairings on disk last changed, so a running session can notice.
+    public static var lastChanged: Date? {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: Paths.secretsFile.path)
+        return attributes?[.modificationDate] as? Date
+    }
+
     public static func load() throws -> SecretStore {
         let url = Paths.secretsFile
         guard FileManager.default.fileExists(atPath: url.path) else { return SecretStore() }

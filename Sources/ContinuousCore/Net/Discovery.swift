@@ -13,10 +13,46 @@ public struct DiscoveredPeer: Sendable, Hashable {
     }
 }
 
-/// Bonjour browser for `_continuous._tcp`.
 ///
 /// Discovery is a convenience only: it never conveys trust. A discovered Mac still has to
 /// pass the pre-shared-key handshake, and an attacker advertising a fake service gains nothing.
+public enum PeerSelection {
+    /// Picks which discovered Mac to dial for a given pairing.
+    ///
+    /// The case that matters is a pairing that has never connected. It has no peer device id
+    /// — that is learned *from* the first handshake — so matching on one can only ever fail,
+    /// and for a while this meant a fresh pairing could not use discovery at all. You needed
+    /// the id to connect and the connection to learn the id.
+    ///
+    /// For an unbound pairing, then, any Continuous Mac that is advertising is worth dialling.
+    /// That is safe for the same reason discovery is not a trust boundary anywhere else here:
+    /// a machine that does not hold the pairing key cannot finish the TLS handshake, so the
+    /// worst a wrong guess costs is one failed connection.
+    ///
+    /// For a pairing that *is* bound, only the Mac it is pinned to will do — a different one
+    /// would be turned away by the allowlist, and dialling it would be noise.
+    public static func choose(from peers: [DiscoveredPeer],
+                              boundTo peerDeviceID: DeviceID?,
+                              excluding localDeviceID: DeviceID?,
+                              attempt: Int = 1) -> DiscoveredPeer? {
+        // Never dial ourselves: a Mac that is both advertising and dialling would otherwise
+        // find its own service and connect to itself.
+        let candidates = peers.filter { peer in
+            guard let localDeviceID, let id = peer.deviceID else { return true }
+            return id != localDeviceID
+        }
+        guard !candidates.isEmpty else { return nil }
+
+        if let peerDeviceID {
+            return candidates.first { $0.deviceID == peerDeviceID }
+        }
+        // Several unknown Macs: give each one a turn rather than retrying the same one.
+        let index = (max(attempt, 1) - 1) % candidates.count
+        return candidates[index]
+    }
+}
+
+/// Bonjour browser for `_continuous._tcp`.
 public final class Discovery {
     private var browser: NWBrowser?
     private let queue = DispatchQueue(label: "app.continuous.discovery")

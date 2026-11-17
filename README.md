@@ -132,7 +132,8 @@ continuous troubleshoot
 Or **menu bar ▸ Why is it not connecting?…** It checks the things that are actually wrong in
 practice and names the one that applies:
 
-* the pairing keys on the two Macs, so you can see whether the code took
+* the pairing keys on the two Macs, so you can see whether the code took — if they match, the
+  pairing is correct and the problem is elsewhere
 * whether the macOS firewall is blocking the Mac that lends its screen — it blocks silently,
   and a blocked port looks exactly like nothing running
 * whether anything is advertising over Bonjour

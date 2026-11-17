@@ -328,6 +328,32 @@ bar reported a crash for what is nearly always "the other end has not been start
 now retried like any other transient failure. And the error it printed contained an invented
 example IP address, which reads like something the program knows and is not — that is gone.
 
+#### "Pairing fails" — twice, and neither time was it the pairing
+
+Reported as a pairing problem, and reported accurately: it worked, the pairing was removed and
+remade, and from then on nothing connected. Two separate bugs, both of mine, and the pairing
+was correct throughout — both Macs showed key `f6b1c664` the whole time.
+
+**Discovery could never find an unpaired Mac.** The only Bonjour lookup matched on the peer's
+device id, which is learned *from* the first handshake. So a pairing that had never connected
+had nothing to match on, and the lookup was skipped entirely. You needed the id to connect and
+the connection to learn the id. `troubleshoot` found the other Mac by browsing while `connect`,
+seconds later, reported it could not — the same network, two different lookups, one of them
+asking an impossible question. An unbound pairing now dials whatever is advertising, which is
+safe for the reason discovery is not a trust boundary anywhere else here: a Mac that does not
+hold the key cannot finish the TLS handshake.
+
+**A listener never reloads its keys.** The set of keys a session will accept is fixed when its
+TLS parameters are built. Pair a new Mac while a session is running and it keeps offering the
+old key set and refuses the new one with `errSSLUnknownPSKIdentity`. From the outside this is
+indistinguishable from a mistyped code — and re-typing cannot fix it, because the stale side is
+the one not being re-paired. Sessions now watch the pairings file and restart when it changes,
+the menu bar restarts after any pairing edit, and that specific TLS status is reported as what
+it is rather than as a guess about the code.
+
+Both were found by probing the two Macs directly rather than reading the code: `nc` showed the
+port open, which ruled out the firewall; the TLS status was −9864, which named the cause exactly.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 
