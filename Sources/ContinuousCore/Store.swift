@@ -52,6 +52,8 @@ public struct Pairing: Codable, Sendable {
     /// The peer's mDNS hostname, learned during the handshake. On networks where Bonjour
     /// browsing is blocked — most corporate ones — this is how the Mac is found again.
     public var peerHostName: String?
+    /// An address you set by hand, for networks where discovery does not work.
+    public var manualEndpoint: String?
     public var lastEndpoint: String?
     public var lastSeenAt: Date?
     /// The other Mac's screen arrangement as of the last connection, so `continuous layout`
@@ -65,6 +67,16 @@ public struct Pairing: Codable, Sendable {
     }
 
     public var keyID: Data { Crypto.deriveKeyID(fromPSK: psk) }
+
+    /// True for a name this app invented rather than one a person chose.
+    ///
+    /// Both Macs name a new pairing locally and identically, so two machines each show
+    /// "Mac 1" and neither tells you anything about the other. Once a handshake reveals who
+    /// is actually on the far end, a name nobody chose should give way to the real one.
+    public var hasGeneratedLabel: Bool {
+        label.range(of: "^Mac [0-9]+$", options: .regularExpression) != nil
+            || label.hasPrefix("pairing-")
+    }
     public var keyIDHex: String { Crypto.hex(keyID) }
     public var isBound: Bool { peerDeviceID != nil }
 
@@ -192,6 +204,11 @@ public class PairingDirectory: @unchecked Sendable {
             store.pairings[idx].peerDeviceID = peer.deviceID
             store.pairings[idx].peerName = peer.name
             if !peer.hostName.isEmpty { store.pairings[idx].peerHostName = peer.hostName }
+            if store.pairings[idx].hasGeneratedLabel, !peer.name.isEmpty {
+                let taken = Set(store.pairings.enumerated()
+                    .filter { $0.offset != idx }.map { $0.element.label })
+                if !taken.contains(peer.name) { store.pairings[idx].label = peer.name }
+            }
             store.pairings[idx].lastEndpoint = peer.endpoint
             store.pairings[idx].lastSeenAt = Date()
             if wasUnbound { bound = store.pairings[idx] }

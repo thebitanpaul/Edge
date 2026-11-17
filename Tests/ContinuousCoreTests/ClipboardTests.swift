@@ -102,3 +102,75 @@ struct ClipboardTests {
         #expect(config.capabilities.contains(.pointer))
     }
 }
+
+@Suite("Pairing identity")
+struct PairingIdentityTests {
+    /// Both Macs name a new pairing locally and identically, so two machines each showed
+    /// "Mac 1" and neither said anything about the other.
+    @Test("generated labels are recognised as generated")
+    func generatedLabels() {
+        func pairing(_ label: String) -> Pairing {
+            Pairing(psk: Crypto.randomBytes(32), label: label)
+        }
+        #expect(pairing("Mac 1").hasGeneratedLabel)
+        #expect(pairing("Mac 17").hasGeneratedLabel)
+        #expect(pairing("pairing-4f2a").hasGeneratedLabel)
+        #expect(!pairing("Work Mac").hasGeneratedLabel)
+        #expect(!pairing("Mac mini in the study").hasGeneratedLabel)
+        #expect(!pairing("MacBook 1 Pro").hasGeneratedLabel)
+    }
+
+    @Test("a generated label gives way to the peer's real name on first connection")
+    func adoptsPeerName() {
+        var store = SecretStore()
+        store.pairings = [Pairing(psk: Crypto.randomBytes(32), label: "Mac 1")]
+        let directory = PairingDirectory(store: store, inMemory: true)
+
+        directory.note(peer: PeerInfo(deviceID: DeviceID(), name: "NAV-LT-0416",
+                                      hostName: "NAV-LT-0416", role: .client,
+                                      capabilities: .baseline, endpoint: "192.168.1.8:52777",
+                                      tlsDescription: "test", keyID: store.pairings[0].keyID))
+        #expect(directory.snapshot.pairings[0].label == "NAV-LT-0416")
+    }
+
+    @Test("a name you chose is never overwritten")
+    func keepsChosenName() {
+        var store = SecretStore()
+        store.pairings = [Pairing(psk: Crypto.randomBytes(32), label: "Work Mac")]
+        let directory = PairingDirectory(store: store, inMemory: true)
+
+        directory.note(peer: PeerInfo(deviceID: DeviceID(), name: "NAV-LT-0416",
+                                      hostName: "NAV-LT-0416", role: .client,
+                                      capabilities: .baseline, endpoint: "", tlsDescription: "",
+                                      keyID: store.pairings[0].keyID))
+        #expect(directory.snapshot.pairings[0].label == "Work Mac")
+        #expect(directory.snapshot.pairings[0].peerName == "NAV-LT-0416")
+    }
+
+    /// Renaming must not create two pairings that cannot be told apart when choosing one.
+    @Test("an adopted name never collides with an existing one")
+    func avoidsCollision() {
+        var store = SecretStore()
+        store.pairings = [Pairing(psk: Crypto.randomBytes(32), label: "NAV-LT-0416"),
+                          Pairing(psk: Crypto.randomBytes(32), label: "Mac 2")]
+        let directory = PairingDirectory(store: store, inMemory: true)
+
+        directory.note(peer: PeerInfo(deviceID: DeviceID(), name: "NAV-LT-0416",
+                                      hostName: "", role: .client, capabilities: .baseline,
+                                      endpoint: "", tlsDescription: "",
+                                      keyID: store.pairings[1].keyID))
+        #expect(directory.snapshot.pairings[1].label == "Mac 2", "should not take a taken name")
+        #expect(Set(directory.snapshot.pairings.map(\.label)).count == 2)
+    }
+
+    @Test("a manual address survives a save and load")
+    func manualAddress() throws {
+        var pairing = Pairing(psk: Crypto.randomBytes(32), label: "Work Mac")
+        pairing.manualEndpoint = "192.168.1.42:52777"
+        var store = SecretStore()
+        store.pairings = [pairing]
+        let data = try JSONEncoder.continuousJSON.encode(store)
+        let back = try JSONDecoder.continuousJSON.decode(SecretStore.self, from: data)
+        #expect(back.pairings[0].manualEndpoint == "192.168.1.42:52777")
+    }
+}

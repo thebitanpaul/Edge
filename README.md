@@ -82,7 +82,7 @@ no Dock icon, no window.
   Mode                 ▸  Share my keyboard & mouse
                           Lend my screen
   ─────────────────────────────
-  Devices              ▸  Work Mac            ▸ Forget…
+  Devices              ▸  Work Mac   ▸ Rename… · Set address… · Forget…
                           Pair a new Mac…
                           Enter a pairing code…
   Screen arrangement   ▸  Left / Right / Above / Below
@@ -110,7 +110,14 @@ First time, choose **Set up…**. It asks the two questions in order and explain
    creates it, and it has no bearing on which Mac shares its keyboard — that is the separate
    choice you just made.
 
-Then press **Start** on both. Everything below still works from the terminal; the menu runs the same
+Then press **Start** on both.
+
+Until the two Macs have actually spoken, each shows the pairing as *"Mac 1 — not connected
+yet"*: neither can know the other's name before a handshake. Once connected, each adopts the
+other's real computer name, and you can **Rename…** it to whatever you like.
+
+If your network blocks Bonjour — common on managed networks — use **Devices ▸ Set address…**
+and give the other Mac's IP. `continuous doctor` on that Mac prints it. Everything below still works from the terminal; the menu runs the same
 session as a child process, so the two are never out of step.
 
 ## Use it from the terminal

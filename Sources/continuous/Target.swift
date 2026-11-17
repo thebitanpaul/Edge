@@ -17,13 +17,13 @@ enum Target {
     }
 
     static func resolve(argument: String?, store: SecretStore, config: Config,
-                        explicitPairing: String?) throws -> Resolved {
+                        explicitPairing: String?, attempt: Int = 1) throws -> Resolved {
         guard !store.pairings.isEmpty else { throw ContinuousError.notPaired }
 
         // 1. An explicit --pair always wins.
         if let needle = explicitPairing {
             let pairing = store.pairings[try store.index(matching: needle)]
-            let endpoint = try locate(pairing, argument: argument, config: config)
+            let endpoint = try locate(pairing, argument: argument, config: config, attempt: attempt)
             return Resolved(pairing: pairing, endpoint: endpoint.0, via: endpoint.1)
         }
 
@@ -35,14 +35,14 @@ enum Target {
                     + store.pairings.map { "continuous connect \"\($0.label)\"" }.joined(separator: "\n    "))
             }
             let pairing = store.pairings[0]
-            let endpoint = try locate(pairing, argument: nil, config: config)
+            let endpoint = try locate(pairing, argument: nil, config: config, attempt: attempt)
             return Resolved(pairing: pairing, endpoint: endpoint.0, via: endpoint.1)
         }
 
         // 3. The argument names a pairing on this Mac.
         if let index = try? store.index(matching: argument) {
             let pairing = store.pairings[index]
-            let endpoint = try locate(pairing, argument: nil, config: config)
+            let endpoint = try locate(pairing, argument: nil, config: config, attempt: attempt)
             return Resolved(pairing: pairing, endpoint: endpoint.0, via: endpoint.1)
         }
 
@@ -53,13 +53,13 @@ enum Target {
                 + "  Say which key to use:  continuous connect \(argument) --pair <label>")
         }
         let pairing = store.pairings[0]
-        let endpoint = try locate(pairing, argument: argument, config: config)
+        let endpoint = try locate(pairing, argument: argument, config: config, attempt: attempt)
         return Resolved(pairing: pairing, endpoint: endpoint.0, via: endpoint.1)
     }
 
     /// Finds the address for a pairing, preferring live discovery over remembered state.
     private static func locate(_ pairing: Pairing, argument: String?,
-                               config: Config) throws -> (NWEndpoint, String) {
+                               config: Config, attempt: Int) throws -> (NWEndpoint, String) {
         // An explicit address or Bonjour name in the argument takes precedence.
         if let argument, !argument.isEmpty {
             if looksLikeAddress(argument) {
@@ -76,8 +76,18 @@ enum Target {
             return (try LinkConnector.parseEndpoint(argument, defaultPort: config.port), "hostname")
         }
 
-        // No address given: find the Mac this pairing is pinned to. Three ways, in order of
-        // how much they can tell us apart from how reliable they are.
+        // An address you typed in comes first — you know something discovery does not.
+        //
+        // Except every third attempt, so a stale one cannot trap the connection for ever: if
+        // the other Mac moved to a new address, discovery gets a turn to find it.
+        if let manual = pairing.manualEndpoint, !manual.isEmpty, attempt % 3 != 0 {
+            info("trying \(manual), the address set for '\(pairing.label)'")
+            return (try LinkConnector.parseEndpoint(manual, defaultPort: config.port),
+                    "the address you set")
+        }
+
+        // Otherwise find the Mac this pairing is pinned to. Three ways, in order of how much
+        // they can tell us apart from how reliable they are.
         if let deviceID = pairing.peerDeviceID {
             info("looking for \(pairing.peerName ?? pairing.label) [\(deviceID.short)]…")
             if let hit = Discovery.first(matching: { $0.deviceID == deviceID }, timeout: 3) {
@@ -102,11 +112,14 @@ enum Target {
                     "last known address")
         }
 
+        // Deliberately no example address here: an invented one reads like a fact, and a
+        // reader has no way to tell it apart from something this Mac actually knows.
         throw ContinuousError.invalidArgument("""
             could not find '\(pairing.label)' on the network.
-              · is `continuous listen` running on the other Mac?
-              · Bonjour is often blocked on corporate networks — connect by address instead:
-                    continuous connect 192.168.1.8 --pair "\(pairing.label)"
+              · is the other Mac started, and set to the opposite role?
+              · Bonjour is blocked on many managed networks. Set the other Mac's address:
+                    menu bar ▸ Devices ▸ \(pairing.label) ▸ Set address…
+                    continuous connect <address> --pair "\(pairing.label)"
               · `continuous discover` shows what is visible from here
             """)
     }

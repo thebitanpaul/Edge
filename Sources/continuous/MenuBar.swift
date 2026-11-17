@@ -306,26 +306,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             submenu.addItem(disabled("No Macs paired yet"))
         } else {
             for pairing in store.pairings {
-                let name = pairing.peerName ?? pairing.label
                 let connected = lastKnownState?.connected == true
                     && lastKnownState?.peerName == pairing.peerName
-                let entry = NSMenuItem(title: name, action: nil, keyEquivalent: "")
+                let entry = NSMenuItem(title: displayName(for: pairing), action: nil,
+                                       keyEquivalent: "")
                 entry.state = connected ? .on : .off
-
-                let detail = NSMenu()
-                detail.addItem(disabled(pairing.isBound
-                                        ? "Paired \(relativeTime(pairing.createdAt))"
-                                        : "Waiting for its first connection"))
-                if let endpoint = pairing.lastEndpoint {
-                    detail.addItem(disabled("Last seen at \(endpoint)"))
-                }
-                detail.addItem(.separator())
-                let forget = NSMenuItem(title: "Forget \(name)…",
-                                        action: #selector(forgetDevice(_:)), keyEquivalent: "")
-                forget.target = self
-                forget.representedObject = pairing.label
-                detail.addItem(forget)
-                entry.submenu = detail
+                entry.submenu = detailMenu(for: pairing)
                 submenu.addItem(entry)
             }
         }
@@ -335,6 +321,123 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         submenu.addItem(action("Enter a pairing code…", #selector(enterPairingCode)))
         item.submenu = submenu
         return item
+    }
+
+    /// What to call a pairing in the menu.
+    ///
+    /// Both Macs invent the same local name for a new pairing, so two machines each showed
+    /// "Mac 1" and neither said anything about the other. Until a handshake reveals who is on
+    /// the far end there is genuinely nothing to show, so say that rather than showing a name
+    /// that looks like an answer.
+    private func displayName(for pairing: Pairing) -> String {
+        if let peer = pairing.peerName, !peer.isEmpty { return peer }
+        if !pairing.hasGeneratedLabel { return pairing.label }
+        return "\(pairing.label) — not connected yet"
+    }
+
+    private func detailMenu(for pairing: Pairing) -> NSMenu {
+        let detail = NSMenu()
+        if pairing.isBound {
+            detail.addItem(disabled("Paired \(relativeTime(pairing.createdAt))"))
+            if let host = pairing.peerHostName { detail.addItem(disabled("Hostname \(host).local")) }
+        } else {
+            detail.addItem(disabled("Never connected"))
+            detail.addItem(disabled("Key \(String(pairing.keyIDHex.prefix(8))) — must match the other Mac"))
+        }
+        if let manual = pairing.manualEndpoint, !manual.isEmpty {
+            detail.addItem(disabled("Address set to \(manual)"))
+        } else if let endpoint = pairing.lastEndpoint {
+            detail.addItem(disabled("Last seen at \(endpoint)"))
+        }
+
+        detail.addItem(.separator())
+        for (title, selector) in [("Rename…", #selector(renameDevice(_:))),
+                                  ("Set address…", #selector(setDeviceAddress(_:))),
+                                  ("Forget…", #selector(forgetDevice(_:)))] {
+            let entry = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = pairing.label
+            detail.addItem(entry)
+        }
+        return detail
+    }
+
+    /// Asks for one line of text, pre-filled.
+    private func prompt(title: String, explanation: String, value: String,
+                        placeholder: String, confirm: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = explanation
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.stringValue = value
+        field.placeholderString = placeholder
+        alert.accessoryView = field
+        alert.addButton(withTitle: confirm)
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func editPairing(labelled label: String, _ change: (inout Pairing) -> Void) {
+        do {
+            var store = try SecretStore.load()
+            guard let index = store.pairings.firstIndex(where: { $0.label == label }) else { return }
+            change(&store.pairings[index])
+            try store.save()
+        } catch {
+            notify("Could not save that", error.localizedDescription)
+        }
+        refresh()
+    }
+
+    @objc private func renameDevice(_ sender: NSMenuItem) {
+        guard let label = sender.representedObject as? String else { return }
+        let store = (try? SecretStore.load()) ?? SecretStore()
+        guard let pairing = store.pairings.first(where: { $0.label == label }) else { return }
+
+        guard let name = prompt(title: "Rename this Mac",
+                                explanation: "Only a name for this list on this Mac. It does "
+                                    + "not change anything on the other machine.",
+                                value: pairing.peerName ?? pairing.label,
+                                placeholder: "Work Mac",
+                                confirm: "Rename"), !name.isEmpty else { return }
+
+        guard !store.pairings.contains(where: { $0.label != label && $0.label == name }) else {
+            notify("That name is taken", "Another pairing is already called “\(name)”.")
+            return
+        }
+        editPairing(labelled: label) { $0.label = name; $0.peerName = name }
+    }
+
+    @objc private func setDeviceAddress(_ sender: NSMenuItem) {
+        guard let label = sender.representedObject as? String else { return }
+        let store = (try? SecretStore.load()) ?? SecretStore()
+        guard let pairing = store.pairings.first(where: { $0.label == label }) else { return }
+
+        let current = pairing.manualEndpoint ?? pairing.lastEndpoint ?? ""
+        guard let address = prompt(
+            title: "Address of the other Mac",
+            explanation: "Needed when Bonjour discovery is blocked, which is common on managed "
+                + "networks. Find it on the other Mac under Devices, or from `continuous doctor`. "
+                + "Leave it empty to go back to discovery.",
+            value: current,
+            placeholder: "192.168.1.42",
+            confirm: "Save") else { return }
+
+        if address.isEmpty {
+            editPairing(labelled: label) { $0.manualEndpoint = nil }
+            return
+        }
+        // Reject it here rather than at the next connection attempt.
+        do {
+            _ = try LinkConnector.parseEndpoint(address, defaultPort: Config().port)
+        } catch {
+            notify("That address was not accepted", error.localizedDescription)
+            return
+        }
+        editPairing(labelled: label) { $0.manualEndpoint = address }
+        if isRunning { stopSession(); startSession() }
     }
 
     @objc private func pairNewMac() {
@@ -362,6 +465,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(code.formatted, forType: .string)
         }
+        notify("Now the other Mac",
+               "Enter that code there, set it to the opposite role, and press Start on both. "
+               + "Until they connect, both Macs will show this pairing as “not connected yet” "
+               + "— they cannot know each other's names before they have spoken.")
         refresh()
     }
 

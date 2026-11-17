@@ -118,6 +118,18 @@ extension Commands {
             exit(1)
         }
 
+        // Opt out of App Nap here too.
+        //
+        // This was only ever done on the sending side, so a receiving session started from
+        // the menu bar — a child of a background accessory app — was throttled and had its
+        // timers coalesced. Injecting events late and answering heartbeats late is what a
+        // 56 ms mean round trip on a LAN looks like, and why the terminal felt smooth and
+        // the menu bar did not.
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
+            reason: "injecting keyboard and pointer input from another Mac")
+        defer { ProcessInfo.processInfo.endActivity(activity) }
+
         try listener.start()
         session.startWatchingDisplays()
         Runtime.installSignalHandlers()
@@ -218,10 +230,15 @@ extension Commands {
             target = try Target.resolve(argument: args.arg(0),
                                         store: directory.snapshot,
                                         config: config,
-                                        explicitPairing: args.string("pair"))
+                                        explicitPairing: args.string("pair"),
+                                        attempt: attempt)
         } catch {
-            if attempt == 1 { bad(error.localizedDescription) ; return .fatal("could not resolve the target") }
-            return .dropped(error)
+            // Not being able to find the other Mac is nearly always "it is not listening
+            // yet", which fixes itself the moment someone presses Start over there. Treating
+            // it as fatal meant the menu bar reported a crash instead of waiting.
+            if attempt == 1 { warn(error.localizedDescription) }
+            else { Log.debug("still cannot find it: \(error.localizedDescription)") }
+            return .dropped(nil)
         }
 
         let peerLabel = target.pairing.peerName ?? target.pairing.label
