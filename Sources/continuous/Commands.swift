@@ -99,12 +99,11 @@ enum Commands {
         let sub = args.arg(0) ?? "list"
         switch sub {
         case "nearby", "network": try pairNearby(args)
-        case "init":   try pairInit(args)
-        case "join":   try pairJoin(args)
+        case "init", "join": try pairByCodeRemoved()
         case "list":   try pairList(args)
         case "forget": try pairForget(args)
         default:
-            throw ContinuousError.invalidArgument("unknown `pair` subcommand '\(sub)' — expected nearby, init, join, list or forget")
+            throw ContinuousError.invalidArgument("unknown `pair` subcommand '\(sub)' — expected nearby, list or forget")
         }
     }
 
@@ -197,58 +196,20 @@ enum Commands {
         out(Style.dim("  then start both:  continuous connect   /   continuous listen"))
     }
 
-    private static func pairInit(_ args: Args) throws {
-        let identity = try Identity.loadOrCreate()
-        let label = args.string("label") ?? "pairing-\(Int(Date().timeIntervalSince1970) % 100000)"
-        let code = PairingCode.generate()
-        var store = try SecretStore.load()
-
-        // Replace any pairing that has never been used: two outstanding codes means two
-        // keys and no way to tell which one the other Mac was given.
-        store.pairings.removeAll { !$0.isBound }
-        if store.pairings.contains(where: { $0.label == label }) {
-            throw ContinuousError.invalidArgument("a pairing labelled '\(label)' already exists — pick another --label or `pair forget` it first")
-        }
-
-        let pairing = Pairing(psk: code.psk, label: label)
-        store.pairings.append(pairing)
-        try store.save()
-
-        out()
-        out(Style.bold("  Pairing code for \(identity.deviceName)"))
-        out()
-        out("      \(Style.cyan(Style.bold(code.formatted)))")
-        out()
-        out(Style.dim("  Type this on the other Mac:"))
-        out("      continuous pair join \(code.formatted) --label \"\(identity.deviceName)\"")
-        out()
-        out(Style.dim("  The code carries 128 bits of secret. Treat it like a password:"))
-        out(Style.dim("  anyone who sees it can connect until this pairing binds to a device."))
-        out(Style.dim("  Stored locally as key \(String(pairing.keyIDHex.prefix(8))) in \(Paths.secretsFile.path)"))
-        out()
-    }
-
-    private static func pairJoin(_ args: Args) throws {
-        let raw = try args.require(1, "CODE")
-        let code = try PairingCode.parse(raw)
-        let label = args.string("label") ?? "pairing-\(String(Crypto.hex(Crypto.deriveKeyID(fromPSK: code.psk)).prefix(6)))"
-        var store = try SecretStore.load()
-
-        let psk = code.psk
-        if let existing = store.pairings.first(where: { Crypto.constantTimeEquals($0.psk, psk) }) {
-            warn("this code is already stored as '\(existing.label)' — nothing to do")
-            return
-        }
-        store.pairings.removeAll { !$0.isBound }
-        if store.pairings.contains(where: { $0.label == label }) {
-            throw ContinuousError.invalidArgument("a pairing labelled '\(label)' already exists — pick another --label")
-        }
-
-        let pairing = Pairing(psk: psk, label: label)
-        store.pairings.append(pairing)
-        try store.save()
-        ok("paired as '\(label)' (key \(String(pairing.keyIDHex.prefix(8))))")
-        out(Style.dim("  Next: run `continuous listen` on the other Mac, then `continuous connect <its-name-or-ip>` here."))
+    /// Kept only to explain where it went.
+    ///
+    /// Typing a code was removed rather than improved. It is two manual actions with no
+    /// feedback until a connection succeeds, so a mismatch — re-pairing one Mac and not the
+    /// other — presents as a mistyped code, and the obvious response of re-pairing recreates
+    /// it. `pair nearby` has neither failure: both Macs derive the same key or neither saves
+    /// anything, and it works over a cable as well as over Wi-Fi.
+    private static func pairByCodeRemoved() throws -> Never {
+        throw ContinuousError.invalidArgument("""
+            pairing by code has been removed.
+              Use:  continuous pair nearby        on both Macs
+              It works over Wi-Fi or a cable between them, derives the same key on both, and
+              shows six digits to compare. There is nothing to type.
+            """)
     }
 
     private static func pairList(_ args: Args) throws {

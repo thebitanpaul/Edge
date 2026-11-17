@@ -144,18 +144,33 @@ public final class NetworkPairingSession {
     private var localConfirmed = false
     private var peerConfirmed = false
 
+    /// Cleared after the well-known port turns out to be busy.
+    private var useWellKnownPort = true
+
+    /// Listen on the well-known port as well, so the other Mac can be told an address.
+    public var acceptsDirectDial = true
+
     public var onProgress: ((Progress) -> Void)?
 
-    public init(identity: Identity, link: LinkPreference = .auto) {
+    /// An address to dial instead of waiting to find one. For networks where discovery is
+    /// blocked — the only situation a typed code was ever needed for.
+    private let directAddress: String?
+
+    public init(identity: Identity, link: LinkPreference = .auto, address: String? = nil) {
         self.identity = identity
         self.link = link
+        self.directAddress = address
     }
 
     // MARK: - Lifecycle
 
     public func start() {
         startListening()
-        startBrowsing()
+        if let directAddress {
+            dialDirectly(directAddress)
+        } else {
+            startBrowsing()
+        }
         report(.waiting)
 
         queue.asyncAfter(deadline: .now() + NetworkPairing.window) { [weak self] in
@@ -207,14 +222,27 @@ public final class NetworkPairingSession {
 
     private func startListening() {
         let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
+        // Deliberately not allowLocalEndpointReuse. With it, two instances both bind the
+        // well-known port and both advertise an identical service — same name, type, port —
+        // which Bonjour collapses into one record, so each sees only itself. Letting the
+        // second bind fail is what makes it take a different port and become visible.
         parameters.includePeerToPeer = true
         if let required = link.interfaceType { parameters.requiredInterfaceType = required }
 
         // An ephemeral port, not a fixed one. Bonjour carries whatever port is bound, so
         // nothing needs to agree on a number in advance — and two instances on one machine
         // cannot collide, which is exactly the case a fixed port made impossible to test.
-        guard let listener = try? NWListener(using: parameters) else {
+        // Prefer the well-known port, because an address typed by hand carries no port
+        // number with it. If it is taken, fall back to any free one — being discoverable
+        // matters more than being directly dialable.
+        //
+        // The fallback has to be driven from the state handler rather than from a failed
+        // initialiser: binding an occupied port succeeds here and only fails later, when the
+        // listener starts. Treating the constructor's success as the answer meant the second
+        // instance on a machine gave up instead of moving aside.
+        let wanted = (useWellKnownPort && acceptsDirectDial)
+            ? (NWEndpoint.Port(rawValue: 52779) ?? .any) : .any
+        guard let listener = try? NWListener(using: parameters, on: wanted) else {
             fail("could not open a pairing port")
             return
         }
@@ -227,9 +255,17 @@ public final class NetworkPairingSession {
                                               type: NetworkPairing.serviceType,
                                               txtRecord: txt.data)
         listener.stateUpdateHandler = { [weak self] state in
-            if case let .failed(error) = state {
-                self?.fail("could not advertise for pairing: \(error.localizedDescription)")
+            guard let self else { return }
+            guard case let .failed(error) = state else { return }
+            if self.useWellKnownPort {
+                Log.debug("pairing port busy, taking another: \(error.localizedDescription)")
+                self.useWellKnownPort = false
+                self.listener?.cancel()
+                self.listener = nil
+                self.startListening()
+                return
             }
+            self.fail("could not advertise for pairing: \(error.localizedDescription)")
         }
         listener.newConnectionHandler = { [weak self] incoming in
             Log.debug("a Mac is dialling us to pair")
@@ -261,6 +297,21 @@ public final class NetworkPairingSession {
         }
         discovery.start()
         self.discovery = discovery
+    }
+
+    /// Dials a Mac at a known address rather than waiting to discover one.
+    private func dialDirectly(_ address: String) {
+        guard let endpoint = try? LinkConnector.parseEndpoint(address, defaultPort: 52779) else {
+            fail("'\(address)' is not an address this can dial")
+            return
+        }
+        let parameters = NWParameters.tcp
+        parameters.includePeerToPeer = true
+        if let required = link.interfaceType { parameters.requiredInterfaceType = required }
+        queue.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.connection == nil, !self.finished else { return }
+            self.adopt(NWConnection(to: endpoint, using: parameters), asInitiator: true)
+        }
     }
 
     // MARK: - The exchange

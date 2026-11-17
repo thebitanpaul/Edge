@@ -435,6 +435,31 @@ unused pairings replace one another instead of accumulating, and the typed-code 
 way: the Mac sharing its keyboard shows the code, the Mac lending its screen types it. Only one
 of them is offered the option, so both cannot sit waiting for the other.
 
+#### Typed codes removed, not improved
+
+Reported once more: a code pairing that said it had succeeded, after which Devices showed
+nothing. Rather than fix it again, it is gone. The method has a fault that care does not
+address — two manual actions with no feedback until a connection succeeds, so one Mac re-paired
+and the other not leaves two keys and a failure that looks exactly like a typo. The obvious
+response, re-pairing, recreates it.
+
+Pairing over the network has neither property, works over a cable as well as Wi-Fi, and needs
+one identical action on each Mac. Where discovery is blocked, an address can be given instead —
+a smaller thing to ask for than a secret, and one that fails immediately when wrong rather than
+looking like a pairing that will not connect.
+
+**On whether a cable needs pairing at all:** it does, and the reason is not caution. The
+pairing key *is* the key the link is encrypted with, so without one there is nothing to encrypt
+keystrokes with; and a cable plugged into a Mac you do not control should not hand it your
+keyboard. Since the same single action pairs over a cable, it costs nothing to keep.
+
+**Also fixed:** the Mac lending its screen never hid its own cursor, so returning the pointer
+left one sitting there — the same two-pointers complaint, from the other side of the link. It
+now hides while the pointer is away. Not uncoupled from the hardware, unlike the sending side:
+that Mac still has its own trackpad, and taking it away would be worse than a stray cursor.
+Instead the cursor is watched, and since nothing is being injected while the pointer is
+elsewhere, any movement means somebody is using that Mac directly and it comes straight back.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 

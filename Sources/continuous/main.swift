@@ -8,13 +8,14 @@ let usage = """
   continuous <command> [options]
 
 \(Style.bold("GETTING STARTED"))
+  On \(Style.bold("both")) Macs, once:
+      continuous pair nearby             \(Style.dim("# compare the six digits, confirm on both"))
+
   On the Mac that will \(Style.bold("lend its screen")):
-      continuous pair init --label "Personal Mac"
       continuous listen
 
   On the Mac with the \(Style.bold("keyboard and mouse")):
-      continuous pair join <CODE> --label "Work Mac"
-      continuous connect                 \(Style.dim("# no argument needed with one pairing"))
+      continuous connect                 \(Style.dim("# no argument needed with one pairing")))
 
   Then push the pointer off the edge of your screen towards the other Mac.
   Hold \(Style.bold("⌘ ⌥ ⌃ ⇧")) together to bring it straight back at any time.
@@ -27,9 +28,7 @@ let usage = """
   selftest                Run the full crypto + transport check over loopback
   permissions             Show privacy permissions, and how to grant them
 
-  pair nearby             Pair with another Mac over the network, no code to type
-  pair init               Generate a pairing code on this Mac
-  pair join <CODE>        Accept a pairing code from the other Mac
+  pair nearby             Pair with another Mac — run it on both, nothing to type
   pair list               Show stored pairings
   pair forget <NAME>      Delete a pairing and stop accepting its key
 
@@ -55,7 +54,6 @@ let usage = """
   config set <KEY> <VAL>  Change a configuration value
 
 \(Style.bold("OPTIONS"))
-  --label <TEXT>          Name for a pairing (pair init / pair join)
   --pair <LABEL>          Which pairing to dial with, when more than one exists
   --alignment <MODE>      proportional | start | center | end (layout set)
   --keys                  Also exercise keyboard injection in the test commands

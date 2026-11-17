@@ -103,18 +103,27 @@ session, because both are read when one starts.
 
 ### Pairing
 
-Choose **Devices ▸ Pair with a nearby Mac…** on *both* Macs. Each shows the same six digits;
-confirm on both. Nothing is typed, and neither Mac can end up with a key the other does not
-have — either both save the same secret or neither saves anything.
+Choose **Devices ▸ Connect to a nearby Mac…** on *both* Macs. Each shows the same six digits;
+confirm on both. That is the whole thing — there is nothing to type, and it works over Wi-Fi or
+over a cable between them.
 
-If the two Macs cannot see each other, a typed code still works, and it goes **one way**:
+Neither Mac can end up with a key the other does not have: they agree one over the network, so
+either both save the same secret or neither saves anything.
 
-* the Mac that **shares its keyboard** shows the code
-* the Mac that **lends its screen** types it in
+If this network blocks discovery, the waiting dialog offers **Enter its address…** — the same
+exchange, dialled directly. A pairing appears under **Devices** once it has connected.
 
-Only that Mac's menu offers to create one, so two Macs cannot both sit waiting for the other
-to type something. A pairing appears under **Devices** once it has actually connected — before
-that it shows as *waiting*, because a code that has been generated is not a paired Mac.
+There used to be a typed code. It is gone, and not because it was fiddly: it is two separate
+manual actions with no feedback until much later, so re-pairing one Mac and not the other left
+them with different keys — which looks exactly like a typo, making the natural fix the very
+thing that caused it.
+
+### Does a cable need pairing too?
+
+Yes, and for a reason worth stating: the pairing key *is* the encryption key. Without one there
+would be nothing to encrypt your keystrokes with, and a cable plugged into a Mac you do not
+control should not hand it your keyboard. It costs nothing — the same one action pairs over a
+cable just as it does over Wi-Fi.
 
 ### The rest of setup
 

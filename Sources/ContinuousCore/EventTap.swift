@@ -323,6 +323,20 @@ public enum LocalPointer {
         state.hidden = true
     }
 
+    /// Hides the cursor without uncoupling the pointer.
+    ///
+    /// For the Mac that lends its screen. While the pointer is on the other machine this one
+    /// should show no cursor at all — but its own trackpad must still work, so the pointer
+    /// stays coupled to the hardware. Balanced by `endCapture` like any other hide.
+    public static func hideOnly() -> CaptureState {
+        var state = CaptureState()
+        state.backgroundControl = enableBackgroundCursorControl()
+        state.hideCount = hideOnAllDisplays()
+        state.hidden = state.hideCount > 0
+        state.confirmedHidden = isCursorVisible.map { !$0 }
+        return state
+    }
+
     public static func endCapture(_ state: CaptureState, restoringTo point: ScreenPoint?) {
         if state.hideCount > 0 {
             enableBackgroundCursorControl()

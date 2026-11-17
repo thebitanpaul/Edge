@@ -288,23 +288,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         let pairAlert = NSAlert()
         pairAlert.messageText = "Pair the two Macs"
-        pairAlert.informativeText =
-            "The two Macs need to share one secret, and none of this affects which Mac shares "
-            + "its keyboard — you have just chosen that separately.\n\n"
-            + "Pairing over the network is the reliable way: choose it on both Macs, compare "
-            + "the six digits they show, and neither can end up with a different key.\n\n"
-            + "With a typed code there is one direction only — the Mac that shares its "
-            + "keyboard shows it, the Mac that lends its screen types it in. This Mac "
-            + (mode == .host ? "shows the code." : "types it in.")
-        pairAlert.addButton(withTitle: "Pair over the network")
-        pairAlert.addButton(withTitle: mode == .host ? "Show a code" : "Enter a code")
+pairAlert.informativeText =
+            "Choose this on both Macs. They find each other over the network — Wi-Fi or a "
+            + "cable between them — agree a key, and show the same six digits for you to "
+            + "compare.\n\n"
+            + "Nothing is typed, so the two Macs cannot end up with different keys. None of "
+            + "it affects which Mac shares its keyboard; you have just chosen that."
+        pairAlert.addButton(withTitle: "Connect to a nearby Mac")
         pairAlert.addButton(withTitle: "Later")
-
-        switch pairAlert.runModal() {
-        case .alertFirstButtonReturn: pairNearby()
-        case .alertSecondButtonReturn: mode == .host ? pairNewMac() : enterPairingCode()
-        default: break
-        }
+        if pairAlert.runModal() == .alertFirstButtonReturn { pairNearby() }
         refresh()
     }
 
@@ -360,20 +352,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         submenu.addItem(.separator())
-        submenu.addItem(action("Pair with a nearby Mac…", #selector(pairNearby)))
-        submenu.addItem(disabled("…choose this on both Macs, nothing to type"))
-
-        // One direction only. Two Macs each generating a code and each waiting for the other
-        // to type it is a stalemate that looks like a bug, so only the Mac that shares its
-        // keyboard offers to create one.
-        submenu.addItem(.separator())
-        if mode == .host {
-            submenu.addItem(action("Show a pairing code…", #selector(pairNewMac)))
-            submenu.addItem(disabled("…then type it on the Mac that lends its screen"))
-        } else {
-            submenu.addItem(action("Enter the code from the other Mac…", #selector(enterPairingCode)))
-            submenu.addItem(disabled("…shown on the Mac that shares its keyboard"))
-        }
+        submenu.addItem(action("Connect to a nearby Mac…", #selector(pairNearby)))
+        submenu.addItem(disabled("…choose this on both Macs. Nothing to type."))
         item.submenu = submenu
         return item
     }
@@ -501,14 +481,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func pairNearby() {
         guard let identity = try? Identity.loadOrCreate() else { return }
         let config = (try? Config.load()) ?? Config()
-        let session = NetworkPairingSession(identity: identity, link: config.link)
+        runPairing(NetworkPairingSession(identity: identity, link: config.link),
+                   allowAddressFallback: true)
+    }
 
+    /// The modal half, shared by discovery and by dialling a known address.
+    private func runPairing(_ session: NetworkPairingSession, allowAddressFallback: Bool) {
         let waiting = NSAlert()
         waiting.messageText = "Looking for the other Mac"
         waiting.informativeText =
-            "Choose “Pair with a nearby Mac” on the other Mac too, within the next two minutes.\n\n"
-            + "They will each show the same six-digit number for you to compare."
+            "Choose “Connect to a nearby Mac” on the other Mac too, within the next two "
+            + "minutes. They will each show the same six digits for you to compare.\n\n"
+            + "If nothing happens, this network may be blocking discovery — some managed "
+            + "ones do. You can give the other Mac's address instead."
         waiting.addButton(withTitle: "Cancel")
+        if allowAddressFallback { waiting.addButton(withTitle: "Enter its address…") }
 
         // The alert is modal, so progress has to arrive as a dismissal rather than an update.
         let result = Box<NetworkPairingSession.Progress?>(nil)
@@ -526,7 +513,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let response = waiting.runModal()
         guard let outcome = result.value else {
             session.cancel()
-            _ = response
+            if allowAddressFallback, response == .alertSecondButtonReturn {
+                pairNearbyByAddress()
+            }
             return
         }
 
@@ -582,6 +571,28 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         default:
             notify("Pairing did not finish", "The other Mac did not confirm.")
         }
+    }
+
+    /// Same exchange, but dialling an address instead of waiting to discover one.
+    ///
+    /// This is the whole reason a typed code existed, and it is a much smaller thing to ask
+    /// for: an address is visible in the other Mac's own menu, and getting it wrong fails
+    /// immediately instead of looking like a successful pairing that will not connect.
+    @objc private func pairNearbyByAddress() {
+        guard let address = prompt(
+            title: "Address of the other Mac",
+            explanation: "Shown on the other Mac under Devices, or by `continuous doctor`. "
+                + "Choose “Connect to a nearby Mac” over there first, then enter its address "
+                + "here.",
+            value: "",
+            placeholder: "192.168.1.42",
+            confirm: "Connect"), !address.isEmpty else { return }
+
+        guard let identity = try? Identity.loadOrCreate() else { return }
+        let config = (try? Config.load()) ?? Config()
+        runPairing(NetworkPairingSession(identity: identity, link: config.link,
+                                         address: address),
+                    allowAddressFallback: false)
     }
 
     private func save(_ outcome: NetworkPairing.Outcome) {

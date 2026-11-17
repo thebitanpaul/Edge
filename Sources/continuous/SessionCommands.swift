@@ -530,6 +530,10 @@ extension Commands {
 final class ReceivingSession {
     var clipboard: ClipboardBridge?
     var clipboardLimit: Int = 1 << 20
+    private var cursorHidden: LocalPointer.CaptureState?
+    private var cursorTimer: DispatchSourceTimer?
+    private var lastInjectedAt = ScreenPoint(x: 0, y: 0)
+    private let cursorQueue = DispatchQueue(label: "app.continuous.client-cursor")
     private let injector: EventInjector
     private let watcher = DisplayWatcher()
     private var link: SecureLink?
@@ -561,6 +565,8 @@ final class ReceivingSession {
     }
 
     func detach() {
+        // Whatever ended the link, this Mac gets its cursor back.
+        showLocalCursor()
         clipboard?.detach()
         lock.lock(); link = nil; lock.unlock()
         // The link may have died mid-drag or with a modifier held.
@@ -571,8 +577,9 @@ final class ReceivingSession {
         clipboard?.handle(message, limit: clipboardLimit)
         switch message {
         case let .mouseMove(x, y, dx, dy):
-            injector.move(to: ScreenPoint(x: Double(x), y: Double(y)),
-                          delta: ScreenPoint(x: Double(dx), y: Double(dy)))
+            let point = ScreenPoint(x: Double(x), y: Double(y))
+            injector.move(to: point, delta: ScreenPoint(x: Double(dx), y: Double(dy)))
+            lastInjectedAt = point
             countEvent()
 
         case let .mouseButton(button, down, clickCount, x, y):
@@ -591,12 +598,15 @@ final class ReceivingSession {
             injector.changeFlags(flags)
 
         case let .enterScreen(x, y, flags):
+            showLocalCursor()
             injector.setFlags(flags)
             injector.warp(to: ScreenPoint(x: Double(x), y: Double(y)))
+            lastInjectedAt = ScreenPoint(x: Double(x), y: Double(y))
             Log.debug("pointer entered at (\(x), \(y))")
 
         case .leaveScreen:
             injector.releaseEverything()
+            hideLocalCursor()
             Log.debug("pointer left")
 
         case let .screenInfo(displays):
@@ -605,6 +615,64 @@ final class ReceivingSession {
         default:
             break
         }
+    }
+
+
+    // MARK: - This Mac's own cursor
+
+    /// Hides this Mac's cursor while the pointer is on the other one.
+    ///
+    /// Without it, the Mac you just left keeps showing a cursor sitting wherever the pointer
+    /// happened to be — which is the same "two pointers" complaint as before, just from the
+    /// other side of the link.
+    ///
+    /// Not uncoupled from the hardware, unlike the sending Mac: this machine still has its
+    /// own trackpad, and taking it away would be worse than a stray cursor. Instead the
+    /// cursor is watched, and if it moves while nothing is being injected then somebody is
+    /// using this Mac directly and it comes straight back.
+    private func hideLocalCursor() {
+        lock.lock()
+        guard cursorHidden == nil else { lock.unlock(); return }
+        let state = LocalPointer.hideOnly()
+        cursorHidden = state
+        lastInjectedAt = LocalPointer.liveLocation
+        lock.unlock()
+
+        if !state.hidden {
+            Log.debug("could not hide this Mac's cursor (\(state.summary))")
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: cursorQueue)
+        timer.schedule(deadline: .now() + 0.1, repeating: 0.1, leeway: .milliseconds(30))
+        timer.setEventHandler { [weak self] in self?.checkForLocalUse() }
+        cursorTimer = timer
+        timer.resume()
+    }
+
+    private func showLocalCursor() {
+        cursorTimer?.cancel()
+        cursorTimer = nil
+        lock.lock()
+        let state = cursorHidden
+        cursorHidden = nil
+        lock.unlock()
+        if let state { LocalPointer.endCapture(state, restoringTo: nil) }
+    }
+
+    /// Is somebody using this Mac's own mouse? Then stop hiding its cursor.
+    private func checkForLocalUse() {
+        lock.lock()
+        let hidden = cursorHidden != nil
+        let expected = lastInjectedAt
+        lock.unlock()
+        guard hidden else { return }
+
+        let actual = LocalPointer.liveLocation
+        let moved = abs(actual.x - expected.x) + abs(actual.y - expected.y)
+        // Nothing is being injected while the pointer is away, so any movement is local.
+        guard moved > 3 else { return }
+        Log.debug("this Mac's own pointer moved — showing its cursor again")
+        showLocalCursor()
     }
 
     /// Pointer moves arrive in the hundreds per second; log a rate, not a line per event.
