@@ -44,6 +44,7 @@ extension Commands {
 
         let injector = EventInjector()
         let session = ReceivingSession(injector: injector)
+        let clipboardLimit = config.clipboardLimit
         let state = Box(RuntimeState(role: .listening))
         state.value.save()
         defer { RuntimeState.clear(.listening) }
@@ -55,6 +56,7 @@ extension Commands {
 
         let listener = LinkListener(identity: identity,
                                     localRole: .client,
+                                    capabilities: config.capabilities,
                                     options: options,
                                     keys: directory.allKeys,
                                     resolvePSK: { [weak directory] keyID in directory?.psk(forKeyID: keyID) },
@@ -86,6 +88,15 @@ extension Commands {
             }
             ok("link up  ←  \(Style.bold(peer.name))  [\(peer.deviceID.short)]  \(peer.endpoint)")
             info("\(peer.tlsDescription)  ·  key \(String(Crypto.hex(peer.keyID).prefix(8)))")
+
+            let clipboard = ClipboardBridge(config: config) { [weak link] message in
+                link?.send(message)
+            }
+            clipboard.onActivity = { info("clipboard: \($0)") }
+            clipboard.attach(peerCapabilities: peer.capabilities)
+            state.mutate { $0.clipboardActive = clipboard.isActive; $0.save() }
+            session.clipboard = clipboard
+            session.clipboardLimit = clipboardLimit
             session.attach(link: link)
         }
 
@@ -215,9 +226,15 @@ extension Commands {
         info("dialling \(NetworkAddress.describe(target.endpoint))  ·  pairing '\(target.pairing.label)'  ·  via \(target.via)")
 
         let link = LinkConnector.connect(to: target.endpoint, psk: target.pairing.psk,
-                                         identity: identity, localRole: .host)
+                                         identity: identity, localRole: .host,
+                                         capabilities: config.capabilities)
         let heartbeat = Heartbeat(link: link)
         let closed = Box<(done: Bool, error: Error?)>((false, nil))
+        let clipboard = ClipboardBridge(config: config) { [weak link] message in
+            link?.send(message)
+        }
+        clipboard.onActivity = { info("clipboard: \($0)") }
+        defer { clipboard.detach() }
 
         sharing?.onModeChange = { mode in
             switch mode {
@@ -233,6 +250,8 @@ extension Commands {
             out()
             link.send(.screenInfo(displays: Displays.current()))
             heartbeat.start()
+            clipboard.attach(peerCapabilities: peer.capabilities)
+            state.mutate { $0.clipboardActive = clipboard.isActive; $0.save() }
         }
 
         var printedSamples = 0
@@ -241,12 +260,17 @@ extension Commands {
             if printedSamples <= 3 || printedSamples % 30 == 0 {
                 out(String(format: "  rtt %6.2f ms   \(Style.dim(stats.summary))", ms))
             }
+            // Published for the menu bar, which has no link of its own to measure.
+            if printedSamples % 5 == 0 {
+                state.mutate { $0.rttMillis = stats.meanMillis; $0.save() }
+            }
         }
         heartbeat.onTimeout = { seq in warn("heartbeat \(seq) lost") }
 
         link.onMessage = { message in
             heartbeat.handle(message)
             sharing?.noteTraffic()
+            clipboard.handle(message, limit: config.clipboardLimit)
             if case let .screenInfo(displays) = message {
                 directory.noteDisplays(displays, forKeyID: link.peer?.keyID ?? Data())
                 let name = link.peer?.name ?? target.pairing.label
@@ -398,6 +422,8 @@ extension Commands {
 /// Everything the receiving Mac does with an established link: act on incoming events, keep
 /// the other side informed about this Mac's screens, and clean up safely when it drops.
 final class ReceivingSession {
+    var clipboard: ClipboardBridge?
+    var clipboardLimit: Int = 1 << 20
     private let injector: EventInjector
     private let watcher = DisplayWatcher()
     private var link: SecureLink?
@@ -429,12 +455,14 @@ final class ReceivingSession {
     }
 
     func detach() {
+        clipboard?.detach()
         lock.lock(); link = nil; lock.unlock()
         // The link may have died mid-drag or with a modifier held.
         injector.releaseEverything()
     }
 
     private func handle(_ message: Message) {
+        clipboard?.handle(message, limit: clipboardLimit)
         switch message {
         case let .mouseMove(x, y, dx, dy):
             injector.move(to: ScreenPoint(x: Double(x), y: Double(y)),

@@ -36,6 +36,7 @@ let usage = """
   connect [HOST|NAME]     Share this Mac's keyboard and mouse with a paired Mac
   discover                Browse the local network for listening Macs
 
+  menubar                 Run the menu-bar front end (also what double-clicking does)
   status                  What is running right now, and where the pointer is
   service install <ROLE>  Start at login as `listen` or `connect`
   service start|stop      Control the login item
@@ -113,6 +114,15 @@ func runConfig(_ args: Args) throws {
                 throw ContinuousError.invalidArgument("edgePressure must be a number between 1 and 200 (points of push)")
             }
             config.edgePressure = n
+        case "clipboardSharing":
+            config.clipboardSharing = ["true", "yes", "1", "on"].contains(value.lowercased())
+        case "clipboardImages":
+            config.clipboardImages = ["true", "yes", "1", "on"].contains(value.lowercased())
+        case "clipboardLimit":
+            guard let n = Int(value), n >= 1024 else {
+                throw ContinuousError.invalidArgument("clipboardLimit is a byte count of at least 1024")
+            }
+            config.clipboardLimit = n
         case "holdLocalPointer":
             config.holdLocalPointer = ["true", "yes", "1", "on"].contains(value.lowercased())
         case "logLevel":
@@ -122,7 +132,7 @@ func runConfig(_ args: Args) throws {
             config.logLevel = value.lowercased()
         default:
             throw ContinuousError.invalidArgument(
-                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment, edgePressure, holdLocalPointer or logLevel")
+                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment, edgePressure, clipboardSharing or logLevel")
         }
         try config.save()
         ok("\(key) = \(value)")
@@ -144,6 +154,14 @@ let args = Args(command == nil ? rawArgs : Array(rawArgs.drop(while: { $0 != com
 if args.has("version") || command == "version" {
     out("continuous \(Runtime.version)")
     exit(0)
+}
+
+// Double-clicking the app, or `open -a Continuous`, launches it with no arguments and no
+// terminal attached. That is the menu-bar front end. Typing `continuous` in a shell still
+// prints the usage, because there a human is waiting to read it.
+let launchedFromFinder = command == nil && !args.has("help") && isatty(STDIN_FILENO) == 0
+if command == "menubar" || launchedFromFinder {
+    runMenuBar()
 }
 
 if command == nil || args.has("help") || command == "help" {

@@ -243,16 +243,34 @@ public struct Config: Codable, Sendable {
     /// moving, and once it is genuinely hidden a stray pixel or two cannot be seen anyway.
     /// Kept as an escape hatch; the session measures drift either way and will say so.
     public var holdLocalPointer: Bool = false
+    /// Copy on one Mac, paste on the other.
+    ///
+    /// Off by default, and that is a deliberate default rather than caution for its own sake:
+    /// whatever you last copied is quite often a password, and this sends it to the other
+    /// machine every time it changes.
+    public var clipboardSharing: Bool = false
+    /// Carry images as well as text. Off by default — a screenshot is megabytes.
+    public var clipboardImages: Bool = false
+    /// Largest clipboard to carry, in bytes. Anything larger is left where it is.
+    public var clipboardLimit: Int = 1 << 20
     public var logLevel: String = "info"
 
     public init() {}
 
     public var edge: ScreenEdge { ScreenEdge.parse(remoteEdge) ?? .right }
+
+    /// What to tell the other Mac this one is willing to do.
+    public var capabilities: Capabilities {
+        var caps = Capabilities.baseline
+        if clipboardSharing { caps.insert(.clipboard) }
+        return caps
+    }
     public var alignment: ScreenAlignment { ScreenAlignment.parse(remoteAlignment) ?? .proportional }
 
     enum CodingKeys: String, CodingKey {
         case version, port, requireLocalNetwork, bonjourEnabled, logLevel
         case remoteEdge, remoteAlignment, edgePressure, holdLocalPointer
+        case clipboardSharing, clipboardImages, clipboardLimit
         case requirePrivateNetwork   // the name this setting had before 0.1.0
     }
 
@@ -271,6 +289,9 @@ public struct Config: Codable, Sendable {
         remoteAlignment = try c.decodeIfPresent(String.self, forKey: .remoteAlignment) ?? "proportional"
         edgePressure = max(1, try c.decodeIfPresent(Double.self, forKey: .edgePressure) ?? 24)
         holdLocalPointer = try c.decodeIfPresent(Bool.self, forKey: .holdLocalPointer) ?? false
+        clipboardSharing = try c.decodeIfPresent(Bool.self, forKey: .clipboardSharing) ?? false
+        clipboardImages = try c.decodeIfPresent(Bool.self, forKey: .clipboardImages) ?? false
+        clipboardLimit = max(1024, try c.decodeIfPresent(Int.self, forKey: .clipboardLimit) ?? (1 << 20))
         logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? "info"
     }
 
@@ -284,6 +305,9 @@ public struct Config: Codable, Sendable {
         try c.encode(remoteAlignment, forKey: .remoteAlignment)
         try c.encode(edgePressure, forKey: .edgePressure)
         try c.encode(holdLocalPointer, forKey: .holdLocalPointer)
+        try c.encode(clipboardSharing, forKey: .clipboardSharing)
+        try c.encode(clipboardImages, forKey: .clipboardImages)
+        try c.encode(clipboardLimit, forKey: .clipboardLimit)
         try c.encode(logLevel, forKey: .logLevel)
     }
 

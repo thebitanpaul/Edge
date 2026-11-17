@@ -26,6 +26,7 @@ public final class LinkListener {
 
     private let identity: Identity
     private let localRole: Role
+    private let capabilities: Capabilities
     private let options: Options
     private let keys: [PSKEntry]
     private let resolvePSK: @Sendable (Data) -> Data?
@@ -43,12 +44,14 @@ public final class LinkListener {
 
     public init(identity: Identity,
                 localRole: Role,
+                capabilities: Capabilities = .baseline,
                 options: Options,
                 keys: [PSKEntry],
                 resolvePSK: @escaping @Sendable (Data) -> Data?,
                 authorizePeer: @escaping @Sendable (DeviceID, Data) -> Bool) {
         self.identity = identity
         self.localRole = localRole
+        self.capabilities = capabilities
         self.options = options
         self.keys = keys
         self.resolvePSK = resolvePSK
@@ -128,6 +131,7 @@ public final class LinkListener {
                               role: .responder,
                               identity: identity,
                               localRole: localRole,
+                              capabilities: capabilities,
                               outboundPSK: nil,
                               resolvePSK: resolvePSK,
                               authorizePeer: authorizePeer,

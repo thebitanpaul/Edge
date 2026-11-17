@@ -2,9 +2,14 @@ import Foundation
 
 public enum Wire {
     /// Bumped whenever the frame layout changes incompatibly.
-    public static let protocolVersion: UInt16 = 2
+    public static let protocolVersion: UInt16 = 3
     /// Frames larger than this are a bug or an attack; the link is dropped.
-    public static let maxFrameSize: Int = 64 * 1024
+    ///
+    /// Generous enough for a clipboard and nothing like generous enough to be a denial of
+    /// service: the peer has already proven it holds the pairing key before it can send a
+    /// single byte, so the cap is about catching corruption rather than resisting a stranger.
+    /// Input events remain tiny — a mouse move is 21 bytes.
+    public static let maxFrameSize: Int = 4 * 1024 * 1024
     public static let nonceLength = 32
     public static let proofLength = 32
     /// Length of the derived PSK identifier that selects which pre-shared key a link uses.

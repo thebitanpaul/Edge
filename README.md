@@ -20,11 +20,10 @@ only to the other Mac, and the code that holds those permissions is in this repo
           no cloud · no account · no third-party server
 ```
 
-**Status: milestone 4 of 5.** Push the pointer off the edge of one Mac and it appears on the
-other, with the keyboard following it. It reconnects on its own and can start at login. What
-remains is optional comfort: clipboard sync, a menu-bar indicator, dead keys and input methods.
-See [BLUEPRINT.md](BLUEPRINT.md) for the plan and [docs/SECURITY.md](docs/SECURITY.md) for the
-security model.
+**Status: all five milestones done.** Push the pointer off the edge of one Mac and it appears on the
+other, with the keyboard following it. It reconnects on its own, starts at login, shares a
+clipboard if you ask it to, and lives in the menu bar. See [BLUEPRINT.md](BLUEPRINT.md) for
+how it is built and [docs/SECURITY.md](docs/SECURITY.md) for the security model.
 
 ---
 
@@ -69,7 +68,32 @@ The code carries 128 bits of secret and is the only thing the two Macs ever shar
 checksummed, so a typo is reported as a typo instead of failing later as an unexplained
 connection error.
 
-## Use it
+## Use it from the menu bar
+
+Double-click **Continuous.app** (or `open -a Continuous`). A pointer appears in the menu bar —
+no Dock icon, no window.
+
+```
+  Connected to Work Mac
+  Pointer is on this Mac
+  round trip 1.2 ms · clipboard shared
+  ─────────────────────────────
+  Stop
+  Mode            ▸  Share my keyboard & mouse
+                     Lend my screen
+  ─────────────────────────────
+  ☑ Share clipboard
+  ☑ Start at login
+  ─────────────────────────────
+  Open log…
+  Quit Continuous
+```
+
+Pick **Mode** on each Mac — one shares its keyboard and mouse, the other lends its screen —
+and press **Start**. Everything below still works from the terminal; the menu runs the same
+session as a child process, so the two are never out of step.
+
+## Use it from the terminal
 
 On the Mac lending its screen:
 
@@ -251,6 +275,25 @@ continuous status                      # what is running right now
 This installs a user LaunchAgent — it runs as you, in your login session, with your
 permissions and no root anywhere. A keyboard forwarder running as root is exactly what this
 project exists to avoid installing.
+
+## Clipboard sharing
+
+Off by default. Turn it on in the menu, or:
+
+```bash
+continuous config set clipboardSharing true     # on BOTH Macs
+continuous config set clipboardImages true      # also carry images (a screenshot is megabytes)
+continuous config set clipboardLimit 4194304    # raise the 1 MiB ceiling
+```
+
+It has to be on at both ends: nothing is sent unless both Macs advertised the capability, so
+switching it off on either one stops it. You are not relying on the other side to respect your
+setting.
+
+Worth being deliberate about. Whatever you last copied is frequently a password, and this
+sends it to the other machine every time it changes. Text, rich text and HTML travel together
+so a paste works wherever it lands; file paths are never carried, because a path that means
+something on one Mac means nothing on the other.
 
 ## Where state lives
 

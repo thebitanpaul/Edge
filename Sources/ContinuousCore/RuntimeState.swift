@@ -23,6 +23,10 @@ public struct RuntimeState: Codable, Sendable {
     /// False when started with `--link-only`: connected, but not capturing anything.
     public var sharingInput: Bool = true
     public var lastError: String?
+    /// Most recent round-trip time, so a status display can show it without its own link.
+    public var rttMillis: Double?
+    /// Whether clipboard sharing actually negotiated on, as opposed to being configured on.
+    public var clipboardActive: Bool = false
 
     public init(role: Role, peerName: String? = nil) {
         self.role = role

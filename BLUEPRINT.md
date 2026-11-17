@@ -245,9 +245,34 @@ The thing that settled it was half an hour reading an implementation that alread
 **Also fixed:** a drag towards the far edge used to hand the pointer over mid-drag, stranding
 whatever you were moving. Crossing is now blocked while any mouse button is held.
 
-### M5 — Comfort (optional, each opt-in)
+### ✅ M5 — Comfort  *(delivered)*
 
-Clipboard sync, a menu-bar status item, dead keys and input methods, a small config UI.
+A menu-bar front end and clipboard sharing, so none of this has to live in a terminal.
+
+**The menu bar supervises rather than reimplements.** The session runs as a child process — the
+same binary with `connect` or `listen` — and the menu watches the state file the session
+already publishes. Two reasons that is worth an extra process: a session that dies takes the
+pointer with it but not the interface, so there is always something left to click *Start* on;
+and there is exactly one implementation of a session, so what you debug from the terminal is
+what the menu runs. Double-clicking the app, or `open -a Continuous`, starts it; typing
+`continuous` in a shell still prints the usage, because there a person is waiting to read it.
+
+**Clipboard sharing is off by default, and that is the point.** Whatever you last copied is
+frequently a password, and this sends it to the other machine every time it changes. It is
+also negotiated: nothing is sent unless *both* Macs advertised the capability, so switching it
+off on either one is enough — you do not have to trust the other side to honour your setting.
+Several representations travel together, richest first, so styled text still pastes somewhere
+that only takes plain. File URLs are deliberately not carried: a path that means something on
+one Mac means nothing, or something else, on the other. Images are a separate opt-in because a
+screenshot is megabytes. Applying the other Mac's clipboard records the change count it
+produced, or the two would hand the same clipboard back and forth for ever.
+
+Frames grew from 64 KiB to 4 MiB to carry a clipboard; input events are unchanged at 21 bytes
+for a mouse move. The protocol version went to 3, so a mismatched pair is refused at the
+handshake with a clear message rather than failing later as an odd frame error.
+
+### M6 — If it is wanted
+Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 
 ---
 
