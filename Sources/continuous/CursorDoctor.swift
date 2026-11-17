@@ -61,92 +61,99 @@ extension Commands {
         ok("both readings follow the mouse when nothing is in the way")
         out()
 
-        // ---- Phase 2: the live conditions. ----
-        out(Style.bold("2. The real thing — movement swallowed, cursor held"))
-        let swallowed = Box<Int>(0)
-        let tap = EventTap { type, event in
-            switch type {
-            case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-                swallowed.mutate { $0 += 1 }
-                return nil
-            default:
-                return event
+        // ---- Phases 2 and 3: the same conditions, two shapes of callback. ----
+        //
+        // The only difference between them is whether the tap callback calls back into the
+        // window server while it is holding one of the window server's events. That is the
+        // thing under suspicion, so it is the only variable.
+        struct Trial {
+            let title: String
+            let warpInCallback: Bool
+        }
+        var results: [(Trial, swallowed: Int, drift: Double, positions: Int)] = []
+
+        for trial in [Trial(title: "2. Deleting the movement, and nothing else",
+                            warpInCallback: false),
+                      Trial(title: "3. Deleting it, and warping the cursor from inside the callback",
+                            warpInCallback: true)] {
+            out(Style.bold(trial.title))
+
+            let park = Box(LocalPointer.liveLocation)
+            let swallowed = Box<Int>(0)
+            let tap = EventTap { type, event in
+                switch type {
+                case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+                    swallowed.mutate { $0 += 1 }
+                    if trial.warpInCallback { LocalPointer.hold(at: park.value) }
+                    return nil
+                default:
+                    return event
+                }
+            }
+            do { try tap.start() } catch {
+                bad(error.localizedDescription); explainCapturePermissions(); throw ExitSilently(code: 1)
+            }
+            out("    tap level: \(tap.location == .cghidEventTap ? "HID" : "session")")
+
+            LocalPointer.allowEventsDuringWarps()
+            park.value = LocalPointer.liveLocation
+            LocalPointer.warp(to: park.value)
+            let detached = LocalPointer.detachFromHardware()
+            let hidden = LocalPointer.hide()
+            out("    detach \(detached ? "ok" : "FAILED") · hide \(hidden ? "ok" : "FAILED") · parked at \(park.value)")
+
+            warn("move the mouse in big circles for 5 seconds — watch the screen")
+            var seen = Set<String>()
+            var maxDrift = 0.0
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline {
+                let live = LocalPointer.liveLocation
+                seen.insert("\(live)")
+                maxDrift = max(maxDrift, abs(live.x - park.value.x) + abs(live.y - park.value.y))
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            }
+
+            LocalPointer.reattachToHardware()
+            if hidden { LocalPointer.show() }
+            tap.stop()
+
+            out(String(format: "    %d movements deleted · cursor strayed at most %.0fpx · %d distinct positions",
+                       swallowed.value, maxDrift, seen.count))
+            results.append((trial, swallowed.value, maxDrift, seen.count))
+            out()
+
+            if swallowed.value == 0 {
+                bad("no movement reached the tap — was the mouse moving?")
+                throw ExitSilently(code: 1)
             }
         }
-        do { try tap.start() } catch {
-            bad(error.localizedDescription); explainCapturePermissions(); throw ExitSilently(code: 1)
-        }
-        defer { tap.stop() }
-        out("    tap level: \(tap.location == .cghidEventTap ? "HID" : "session")")
 
-        LocalPointer.allowEventsDuringWarps()
-        let park = LocalPointer.location
-        LocalPointer.warp(to: park)
-        let detached = LocalPointer.detachFromHardware()
-        let hidden = LocalPointer.hide()
-        out("    detach reported \(detached ? "success" : "FAILURE")")
-        out("    hide reported   \(hidden ? "success" : "FAILURE")")
-        out("    parked at \(park)")
+        // ---- Verdict ----
+        out(Style.bold("Verdict"))
+        let plain = results[0]
+        let warping = results[1]
 
-        // The same 8 ms hold the live session uses.
-        let holdQueue = DispatchQueue(label: "app.continuous.doctor-hold")
-        let timer = DispatchSource.makeTimerSource(queue: holdQueue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .milliseconds(2))
-        timer.setEventHandler { LocalPointer.hold(at: park) }
-        timer.resume()
-        defer { timer.cancel() }
-
-        out()
-        warn("move the mouse in big circles for 5 seconds — watch the screen")
-        var cgSeen = Set<String>()
-        var nsSeen = Set<String>()
-        var maxCGDrift = 0.0
-        var maxNSDrift = 0.0
-        deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            let cg = LocalPointer.location
-            let ns = appKitLocation()
-            cgSeen.insert("\(cg)")
-            nsSeen.insert("\(ns)")
-            maxCGDrift = max(maxCGDrift, abs(cg.x - park.x) + abs(cg.y - park.y))
-            maxNSDrift = max(maxNSDrift, abs(ns.x - park.x) + abs(ns.y - park.y))
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
-        }
-        timer.cancel()
-        LocalPointer.reattachToHardware()
-        if hidden { LocalPointer.show() }
-        tap.stop()
-
-        out()
-        out(Style.bold("Results"))
-        out("    movement events swallowed   \(swallowed.value)")
-        out(String(format: "    CoreGraphics drift (max)    %.0f px   across %d positions", maxCGDrift, cgSeen.count))
-        out(String(format: "    AppKit drift (max)          %.0f px   across %d positions", maxNSDrift, nsSeen.count))
-        out()
-
-        guard swallowed.value > 0 else {
-            bad("no movement reached the tap at all — did the mouse move?")
-            throw ExitSilently(code: 1)
-        }
-
-        // AppKit is the reading to trust: CoreGraphics' copy only advances when a movement
-        // event is delivered to this process, and we are deleting all of those.
-        if maxNSDrift < 6 {
-            ok("the cursor was held within \(Int(maxNSDrift))px of where it was parked")
-            info("if you still SAW it moving, say so — that would mean neither reading is")
-            info("telling the truth, and the next step is a different approach entirely.")
+        if plain.drift < 6 && warping.drift >= 6 {
+            ok("deleting the movement holds the cursor; warping from inside the callback breaks it")
+            out()
+            out("    Cursor strayed \(Int(plain.drift))px when the callback only deleted the event,")
+            out("    and \(Int(warping.drift))px when it also warped the cursor. Calling back into the")
+            out("    window server while holding one of its events lets events through.")
+            out()
+            info("this build already does the first of those. You should see one pointer.")
+        } else if plain.drift < 6 && warping.drift < 6 {
+            ok("the cursor was held still both ways (\(Int(plain.drift))px and \(Int(warping.drift))px)")
+            out()
+            out("    So the host side holds its cursor under both shapes of callback, and the")
+            out("    pointer you are seeing is not this Mac's own cursor being moved by your")
+            out("    mouse. Worth checking next: whether the other Mac's cursor is showing on")
+            out("    the shared monitor because the monitor is switched to it.")
         } else {
-            bad("the cursor moved up to \(Int(maxNSDrift))px away despite being held every 8ms")
+            bad("the cursor strayed even with a callback that does nothing but delete the event")
             out()
-            out("    This is the bug. What it tells us:")
-            if maxCGDrift < 6 && maxNSDrift >= 6 {
-                out("      · CoreGraphics reported the cursor as stationary while AppKit saw it move,")
-                out("        so any correction that checks before acting is blind here.")
-            }
-            out("      · \(swallowed.value) movements were deleted at the \(tap.location == .cghidEventTap ? "HID" : "session") level and the cursor moved anyway.")
-            out("      · detach \(detached ? "succeeded" : "failed"), hide \(hidden ? "succeeded" : "failed"), and \(Int(5 / 0.008)) warps were issued.")
-            out()
-            out("    Please send this whole output.")
+            out("    \(Int(plain.drift))px over \(plain.positions) positions, \(plain.swallowed) movements deleted,")
+            out("    at the \(results[0].0.warpInCallback ? "?" : "HID") level. That contradicts the measurement this")
+            out("    build is based on, so please send this output — it changes the diagnosis.")
             throw ExitSilently(code: 1)
         }
     }

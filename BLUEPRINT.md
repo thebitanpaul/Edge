@@ -206,17 +206,30 @@ threw it home, leaving a stranded cursor on each machine. That became edge press
 lean on an edge to go through it. Both were real bugs. Neither was *this* bug.
 
 **Attempt 3 — stop trusting the APIs.** `CGAssociateMouseAndMouseCursorPosition(0)` returns
-success. `CGDisplayHideCursor` returns success. Deleting the event at the HID tap succeeds. On
-this macOS the cursor moves anyway. So its position is no longer assumed — it is enforced:
-after every movement the real cursor position is read and corrected if it has strayed, and the
-detach is renewed, because warping re-couples the pointer. Measured here at 0.21 µs to read and
-37.7 µs to correct: under 1% of a core at a few hundred events a second.
+success, `CGDisplayHideCursor` returns success, and the cursor moved anyway, so the position
+was corrected after every movement instead. This made it worse, for a reason that took a
+fourth attempt to see.
 
-The useful lesson is about testing. The obvious check — swallow a movement, assert the cursor
-did not move — cannot be driven by synthetic events, because those carry an absolute position
-and move the cursor as they are posted whether or not a tap deletes them. Pinning *can* be
-tested that way, because it reads the real position and corrects it. So `capture-test` verifies
-pinning automatically, and asks for four seconds of real mouse movement for the rest.
+**Attempt 4 — measure first.** `cursor-doctor` reproduces the live conditions on one Mac and
+reports numbers. It said: tap at the HID level, 447 movements deleted, cursor held at **one
+distinct position, 0 px of drift**. Deleting the event holds the cursor completely — all three
+earlier theories were solving a problem that does not exist at that layer.
+
+What *did* exist was the correction itself. The tap callback runs inside the window server's
+own event pipeline, and the correction called synchronously back into it — a warp plus a
+re-detach, about 48 µs of IPC — while holding one of its events. That is enough for events to
+slip through undeleted, which is precisely the second cursor. The fix that was supposed to
+hold the cursor still was the thing letting it move.
+
+So the callback now deletes the event and does nothing else. The timer-based re-parking
+survives as `holdLocalPointer`, off by default, and `checkLiveness` measures drift rather than
+correcting it — correcting from there was what hid the problem in the first place.
+
+The lesson, recorded because it was expensive: three fixes were reasoned from documentation and
+all three were wrong, in a way no amount of further reading would have caught. The thing that
+settled it was a diagnostic that ran the real conditions and printed numbers. `cursor-doctor`
+now runs two trials that differ only in whether the callback calls back into the window server,
+so the comparison is visible rather than argued.
 
 **Also fixed:** a drag towards the far edge used to hand the pointer over mid-drag, stranding
 whatever you were moving. Crossing is now blocked while any mouse button is held.

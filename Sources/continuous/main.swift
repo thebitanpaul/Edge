@@ -113,6 +113,8 @@ func runConfig(_ args: Args) throws {
                 throw ContinuousError.invalidArgument("edgePressure must be a number between 1 and 200 (points of push)")
             }
             config.edgePressure = n
+        case "holdLocalPointer":
+            config.holdLocalPointer = ["true", "yes", "1", "on"].contains(value.lowercased())
         case "logLevel":
             guard LogLevel.parse(value) != nil else {
                 throw ContinuousError.invalidArgument("logLevel must be trace, debug, info, warn or error")
@@ -120,7 +122,7 @@ func runConfig(_ args: Args) throws {
             config.logLevel = value.lowercased()
         default:
             throw ContinuousError.invalidArgument(
-                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment, edgePressure or logLevel")
+                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment, edgePressure, holdLocalPointer or logLevel")
         }
         try config.save()
         ok("\(key) = \(value)")

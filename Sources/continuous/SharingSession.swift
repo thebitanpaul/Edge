@@ -46,9 +46,10 @@ final class SharingSession {
     private var driftCorrections = 0
     /// Buttons currently held down on this Mac's own mouse.
     private var heldButtons: Set<MouseButtonID> = []
-    /// Re-parks the cursor between events, in case a warp made inside the tap callback is
-    /// overwritten when the window server finishes with the event we deleted.
+    /// Optional belt-and-braces re-parking, off by default — see `startHolding`.
     private var holdTimer: DispatchSourceTimer?
+    /// Largest distance the cursor strayed from its parking spot during this trip.
+    private var maxDrift: Double = 0
     private let holdQueue = DispatchQueue(label: "app.continuous.cursor-hold")
 
     var onModeChange: ((Mode) -> Void)?
@@ -122,9 +123,17 @@ final class SharingSession {
             return
         }
 
-        // The 8 ms timer does the holding; this just notices if it has somehow stopped.
+        // Measure rather than correct. If the cursor is straying, that is worth knowing
+        // precisely; correcting it from here was what masked the real problem.
         guard remote, let parked else { return }
-        if holdTimer == nil { LocalPointer.hold(at: parked) }
+        let actual = LocalPointer.liveLocation
+        let drift = abs(actual.x - parked.x) + abs(actual.y - parked.y)
+        if drift > maxDrift {
+            lock.lock(); maxDrift = drift; lock.unlock()
+            if drift > 4 {
+                Log.warn(String(format: "this Mac's cursor has strayed %.0fpx from where it was parked", drift))
+            }
+        }
     }
 
     var isRemote: Bool { lock.lock(); defer { lock.unlock() }; return router.isRemote }
@@ -199,14 +208,15 @@ final class SharingSession {
                 currentLink.send(.mouseMove(x: Int32(remotePoint.x), y: Int32(remotePoint.y),
                                             dx: Int32(delta.x), dy: Int32(delta.y)))
 
-                // Hold this Mac's own cursor still. Swallowing the event and detaching the
-                // pointer both report success and neither actually stops it, so the position
-                // is checked and corrected on every single movement instead.
-                lock.lock()
-                forwarded += 1
-                let parked = parkedAt
-                lock.unlock()
-                if let parked { LocalPointer.hold(at: parked) }
+                // Nothing else happens here, deliberately.
+                //
+                // This callback sits inside the window server's own event pipeline, and a
+                // synchronous call back into it — warping the cursor, say — is enough to make
+                // events slip through unswallowed. `cursor-doctor` measured a callback that
+                // only counts and deletes: 447 movements, cursor held at a single position.
+                // Deleting the event is what holds the cursor still. Anything added here can
+                // only take that away.
+                lock.lock(); forwarded += 1; lock.unlock()
                 return nil
             case let .comeBack(local):
                 finishReturn(to: local, link: currentLink, reason: "pointer came back")
@@ -235,7 +245,7 @@ final class SharingSession {
         LocalPointer.warp(to: departure)
         pointerDetached = LocalPointer.detachFromHardware()
         cursorHidden = LocalPointer.hide()
-        lock.lock(); parkedAt = departure; driftCorrections = 0; lock.unlock()
+        lock.lock(); parkedAt = departure; driftCorrections = 0; maxDrift = 0; lock.unlock()
         startHolding(at: departure)
         Log.debug("pointer left this Mac at \(departure) → arrived at \(entry) on the other")
         if !cursorHidden {
@@ -245,12 +255,14 @@ final class SharingSession {
         onModeChange?(.remote)
     }
 
-    /// Pins the cursor roughly every other frame for as long as the pointer is away.
+    /// Re-parks the cursor on a timer, off the tap's thread. Off unless asked for.
     ///
-    /// Belt and braces alongside the per-event hold: together they mean the cursor cannot
-    /// travel more than a few milliseconds' worth of movement before being put back, which is
-    /// below the threshold of noticing.
+    /// Deleting the movement is what actually holds the cursor still, and it does so
+    /// completely. This exists for the case where some Mac, some day, turns out to need it —
+    /// `continuous config set holdLocalPointer true`. It runs on its own queue rather than in
+    /// the tap callback, because that is where the harm was.
     private func startHolding(at point: ScreenPoint) {
+        guard config.holdLocalPointer else { return }
         holdTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: holdQueue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .milliseconds(2))
@@ -290,10 +302,15 @@ final class SharingSession {
         driftCorrections = 0
         lock.unlock()
         _ = corrections
-        Log.debug("held this Mac's cursor still across \(moves) forwarded movements "
-                  + "(tap: \(tap?.location == .cghidEventTap ? "HID" : "session"), "
-                  + "detach reported \(pointerDetached ? "success" : "failure"), "
-                  + "hide reported \(cursorHidden ? "success" : "failure"))")
+        let strayed = maxDrift
+        lock.lock(); maxDrift = 0; lock.unlock()
+        let summary = String(format: "%d movements forwarded, cursor strayed at most %.0fpx "
+                             + "(tap: %@, detach %@, hide %@)",
+                             moves, strayed,
+                             tap?.location == .cghidEventTap ? "HID" : "session",
+                             pointerDetached ? "ok" : "failed",
+                             cursorHidden ? "ok" : "failed")
+        if strayed > 4 { Log.warn(summary) } else { Log.debug(summary) }
 
         Log.debug("pointer back on this Mac (\(reason))")
         onModeChange?(.local)

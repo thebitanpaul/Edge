@@ -237,6 +237,11 @@ public struct Config: Codable, Sendable {
     /// How far you must push against a screen edge, in points, before the pointer goes
     /// through it. Lower feels quicker; too low and the pointer bounces between the Macs.
     public var edgePressure: Double = 24
+    /// Re-park this Mac's cursor on a timer while the pointer is on the other Mac.
+    ///
+    /// Off by default: deleting the movement in the event tap already holds the cursor
+    /// completely still, and doing extra work for it turned out to be counterproductive.
+    public var holdLocalPointer: Bool = false
     public var logLevel: String = "info"
 
     public init() {}
@@ -246,7 +251,7 @@ public struct Config: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case version, port, requireLocalNetwork, bonjourEnabled, logLevel
-        case remoteEdge, remoteAlignment, edgePressure
+        case remoteEdge, remoteAlignment, edgePressure, holdLocalPointer
         case requirePrivateNetwork   // the name this setting had before 0.1.0
     }
 
@@ -264,6 +269,7 @@ public struct Config: Codable, Sendable {
         remoteEdge = try c.decodeIfPresent(String.self, forKey: .remoteEdge) ?? "right"
         remoteAlignment = try c.decodeIfPresent(String.self, forKey: .remoteAlignment) ?? "proportional"
         edgePressure = max(1, try c.decodeIfPresent(Double.self, forKey: .edgePressure) ?? 24)
+        holdLocalPointer = try c.decodeIfPresent(Bool.self, forKey: .holdLocalPointer) ?? false
         logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? "info"
     }
 
@@ -276,6 +282,7 @@ public struct Config: Codable, Sendable {
         try c.encode(remoteEdge, forKey: .remoteEdge)
         try c.encode(remoteAlignment, forKey: .remoteAlignment)
         try c.encode(edgePressure, forKey: .edgePressure)
+        try c.encode(holdLocalPointer, forKey: .holdLocalPointer)
         try c.encode(logLevel, forKey: .logLevel)
     }
 

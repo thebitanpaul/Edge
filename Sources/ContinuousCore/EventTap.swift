@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreGraphics
 
 /// A `CGEventTap` on the Mac whose keyboard and mouse are being shared.
@@ -223,6 +224,18 @@ public enum LocalPointer {
     public static var location: ScreenPoint {
         guard let event = CGEvent(source: nil) else { return ScreenPoint(x: 0, y: 0) }
         return ScreenPoint(x: Double(event.location.x), y: Double(event.location.y))
+    }
+
+    /// The same question asked of AppKit, which answers from the window server rather than
+    /// from this process's copy of the event stream.
+    ///
+    /// Worth having separately: while the pointer is on the other Mac every movement event is
+    /// deleted, so `location` can sit frozen at the parked position while the cursor is
+    /// visibly somewhere else. Measuring drift needs a reader that cannot be fooled that way.
+    public static var liveLocation: ScreenPoint {
+        let p = NSEvent.mouseLocation
+        let height = CGDisplayBounds(CGMainDisplayID()).height
+        return ScreenPoint(x: Double(p.x), y: Double(height - p.y))
     }
 
     /// Puts the cursor at `point`, unconditionally.
