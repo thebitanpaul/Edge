@@ -41,12 +41,16 @@ final class SharingSession {
     private var cursorHidden = false
     private var pointerDetached = false
     private var forwarded = 0
+    /// Where this Mac's cursor was parked when the pointer left.
+    private var parkedAt: ScreenPoint?
+    private var driftCorrections = 0
 
     var onModeChange: ((Mode) -> Void)?
 
     init(config: Config, remoteName: String) {
         self.config = config
         self.remoteName = remoteName
+        router.edgePressureThreshold = config.edgePressure
     }
 
     // MARK: - Lifecycle
@@ -97,12 +101,33 @@ final class SharingSession {
         lock.lock(); link = nil; lock.unlock()
     }
 
-    /// Called from the run loop. Takes the pointer back if the other Mac has gone quiet.
+    /// Called from the run loop, about ten times a second.
     func checkLiveness() {
         lock.lock()
-        let stale = router.isRemote && Date().timeIntervalSince(lastHeardFrom) > Self.silenceTimeout
+        let remote = router.isRemote
+        let stale = remote && Date().timeIntervalSince(lastHeardFrom) > Self.silenceTimeout
+        let parked = parkedAt
         lock.unlock()
-        if stale { returnToLocal(reason: "the other Mac stopped responding") }
+
+        if stale {
+            returnToLocal(reason: "the other Mac stopped responding")
+            return
+        }
+
+        // Backstop against a second cursor. While the pointer is away this Mac's own cursor
+        // must not move at all; if it has, something let a movement through and the honest
+        // thing to do is put it back and say so, rather than leave two cursors on screen.
+        guard remote, let parked else { return }
+        let actual = Displays.pointerLocation
+        let drift = abs(actual.x - parked.x) + abs(actual.y - parked.y)
+        guard drift > 2 else { return }
+
+        LocalPointer.warp(to: parked)
+        lock.lock(); driftCorrections += 1; let count = driftCorrections; lock.unlock()
+        if count == 1 || count % 25 == 0 {
+            Log.warn("local cursor drifted \(Int(drift))px while the pointer was away — put it back (correction \(count))")
+            Log.warn("tap level: \(tap?.location == .cghidEventTap ? "HID" : "session"), pointer detached: \(pointerDetached)")
+        }
     }
 
     var isRemote: Bool { lock.lock(); defer { lock.unlock() }; return router.isRemote }
@@ -187,6 +212,8 @@ final class SharingSession {
         LocalPointer.warp(to: departure)
         pointerDetached = LocalPointer.detachFromHardware()
         cursorHidden = LocalPointer.hide()
+        lock.lock(); parkedAt = departure; lock.unlock()
+        Log.debug("pointer left this Mac at \(departure) → arrived at \(entry) on the other")
         if !cursorHidden {
             Log.debug("could not hide the local cursor; it will sit parked at the edge instead")
         }
@@ -211,6 +238,14 @@ final class SharingSession {
         if pointerDetached { LocalPointer.reattachToHardware(); pointerDetached = false }
         if cursorHidden { LocalPointer.show(); cursorHidden = false }
         if let destination { LocalPointer.warp(to: destination) }
+        lock.lock()
+        parkedAt = nil
+        let corrections = driftCorrections
+        driftCorrections = 0
+        lock.unlock()
+        if corrections > 0 {
+            Log.debug("corrected the local cursor \(corrections) time(s) during that trip")
+        }
 
         Log.debug("pointer back on this Mac (\(reason))")
         onModeChange?(.local)

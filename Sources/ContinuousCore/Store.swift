@@ -234,6 +234,9 @@ public struct Config: Codable, Sendable {
     public var remoteEdge: String = "right"
     /// How the two Macs line up along that edge when the screens are different sizes.
     public var remoteAlignment: String = "proportional"
+    /// How far you must push against a screen edge, in points, before the pointer goes
+    /// through it. Lower feels quicker; too low and the pointer bounces between the Macs.
+    public var edgePressure: Double = 24
     public var logLevel: String = "info"
 
     public init() {}
@@ -243,7 +246,7 @@ public struct Config: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case version, port, requireLocalNetwork, bonjourEnabled, logLevel
-        case remoteEdge, remoteAlignment
+        case remoteEdge, remoteAlignment, edgePressure
         case requirePrivateNetwork   // the name this setting had before 0.1.0
     }
 
@@ -260,6 +263,7 @@ public struct Config: Codable, Sendable {
         bonjourEnabled = try c.decodeIfPresent(Bool.self, forKey: .bonjourEnabled) ?? true
         remoteEdge = try c.decodeIfPresent(String.self, forKey: .remoteEdge) ?? "right"
         remoteAlignment = try c.decodeIfPresent(String.self, forKey: .remoteAlignment) ?? "proportional"
+        edgePressure = max(1, try c.decodeIfPresent(Double.self, forKey: .edgePressure) ?? 24)
         logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? "info"
     }
 
@@ -271,6 +275,7 @@ public struct Config: Codable, Sendable {
         try c.encode(bonjourEnabled, forKey: .bonjourEnabled)
         try c.encode(remoteEdge, forKey: .remoteEdge)
         try c.encode(remoteAlignment, forKey: .remoteAlignment)
+        try c.encode(edgePressure, forKey: .edgePressure)
         try c.encode(logLevel, forKey: .logLevel)
     }
 

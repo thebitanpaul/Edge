@@ -160,11 +160,11 @@ struct ScreenLayoutTests {
     func entryAndReturn() {
         let l = layout(local: [Rig.personalBuiltIn], remote: [Rig.workBuiltIn], edge: .right)
         let entry = l.entryPoint(leavingLocalAt: ScreenPoint(x: 1469, y: 478))
-        #expect(entry.x >= 0 && entry.x < 20, "should arrive near their left edge, got \(entry)")
+        #expect(entry.x > 8 && entry.x < 60, "should arrive inside their left edge, got \(entry)")
         #expect(l.remoteDisplays.contains { $0.contains(entry) }, "must land on a real screen")
 
         let back = l.returnPoint(enteringLocalAt: ScreenPoint(x: 1469, y: 478))
-        #expect(back.x > 1440 && back.x < 1470, "should come back near our right edge, got \(back)")
+        #expect(back.x > 1400 && back.x < 1470, "should come back near our right edge, got \(back)")
         #expect(l.localDisplays.contains { $0.contains(back) })
     }
 

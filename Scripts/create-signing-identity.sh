@@ -3,7 +3,7 @@
 # Creates a self-signed code-signing certificate so Continuous.app keeps a stable identity.
 #
 # Why you want this: macOS keys Accessibility and Input Monitoring grants to an app's code
-# identity. With an ad-hoc signature that identity is the hash of the app's contents, so every
+# identity. With an ad-hoc signature that identity is a hash of the app's contents, so every
 # rebuild looks like a different app and you have to grant both permissions again. A
 # self-signed certificate gives the bundle one identity that survives rebuilds.
 #
@@ -12,12 +12,19 @@
 #
 #     security delete-certificate -c "Continuous Local Signing"
 #
-# Run once:   Scripts/create-signing-identity.sh
+# Usage:  Scripts/create-signing-identity.sh [--keychain PATH]
 
 set -euo pipefail
 
 NAME="Continuous Local Signing"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keychain) KEYCHAIN="$2"; shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+done
 
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$NAME"; then
   echo "✓ '$NAME' already exists — nothing to do."
@@ -29,35 +36,52 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "==> Generating a self-signed code-signing certificate"
-# basicConstraints CA:false and the codeSigning EKU are what make codesign accept it.
+# The common name is what `codesign -s` matches on, so it has to be exactly $NAME.
+# basicConstraints CA:false and the codeSigning EKU are what make codesign accept it at all.
 openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
   -keyout "$WORK/key.pem" -out "$WORK/cert.pem" \
-  -subj "/CN=$NAME/O=Continuous/C=US" \
+  -subj "/CN=$NAME/O=Continuous" \
   -addext "basicConstraints=critical,CA:false" \
   -addext "keyUsage=critical,digitalSignature" \
   -addext "extendedKeyUsage=critical,codeSigning" 2>/dev/null
 
-openssl pkcs12 -export -out "$WORK/identity.p12" \
+# Two things will break this bundle if you let them.
+#
+# An *empty* password produces a PKCS#12 that macOS refuses with
+#   "MAC verification failed during PKCS12 import (wrong password?)"
+# which reads like the password is wrong when the real problem is that there isn't one. So the
+# bundle gets a random password that exists only for the next three lines.
+#
+# OpenSSL 3 also defaults to a SHA-256 MAC and AES encryption, which the Security framework
+# cannot read. `-legacy` asks for the older algorithms it does understand. LibreSSL — what
+# /usr/bin/openssl is on a stock macOS — has no such flag and does not need one.
+PW="$(openssl rand -hex 24)"
+if openssl pkcs12 -help 2>&1 | grep -q -- -legacy; then
+  LEGACY=(-legacy)
+else
+  LEGACY=()
+fi
+openssl pkcs12 -export "${LEGACY[@]}" -out "$WORK/identity.p12" \
   -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
-  -name "$NAME" -passout pass: 2>/dev/null
+  -name "$NAME" -passout "pass:$PW" 2>/dev/null
 
-echo "==> Importing into your login keychain"
-# -T /usr/bin/codesign lets codesign use the key without prompting on every build.
-security import "$WORK/identity.p12" -k "$KEYCHAIN" -P "" \
-  -T /usr/bin/codesign -T /usr/bin/security
+echo "==> Importing into the keychain"
+# -T lets codesign use the private key without a prompt on every single build.
+security import "$WORK/identity.p12" -k "$KEYCHAIN" -P "$PW" \
+  -T /usr/bin/codesign -T /usr/bin/security >/dev/null
 
-echo "==> Marking it trusted for code signing"
-# Trust settings live in the login keychain, so this is a user-level change and needs no sudo.
-# It may ask for your login password once.
-security add-trusted-cert -d -r trustRoot -p codeSign -k "$KEYCHAIN" "$WORK/cert.pem" \
-  2>/dev/null || echo "    (trust step skipped — signing usually works regardless)"
+echo "==> Trusting it for code signing"
+# User trust domain, not system: no administrator password, and the trust applies to you only.
+# Without this the identity imports but `codesign` reports CSSMERR_TP_NOT_TRUSTED.
+security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$WORK/cert.pem" 2>/dev/null \
+  || echo "    (could not set trust automatically — see the note below if signing fails)"
 
-# Stop the keychain prompting for the key on every single build.
+# Stop the keychain prompting for the key on every build.
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN" >/dev/null 2>&1 \
   || true
 
 echo
-if security find-identity -v -p codesigning | grep -q "$NAME"; then
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$NAME"; then
   echo "✓ '$NAME' is ready."
   echo
   echo "Next:"
@@ -66,6 +90,12 @@ if security find-identity -v -p codesigning | grep -q "$NAME"; then
   echo "You will be asked for Accessibility and Input Monitoring one more time,"
   echo "because the app's identity has just changed. After that they will stick."
 else
-  echo "✗ The identity was not created. Scripts/build.sh will fall back to ad-hoc signing."
+  echo "✗ The identity is not usable for signing yet."
+  echo "  It was imported, but macOS does not trust it for code signing."
+  echo "  Open Keychain Access, find \"$NAME\", get info, and under Trust set"
+  echo "  \"Code Signing\" to \"Always Trust\". Then run Scripts/build.sh."
+  echo
+  echo "  Scripts/build.sh falls back to ad-hoc signing until then, which works —"
+  echo "  it just means re-granting permissions after each rebuild."
   exit 1
 fi

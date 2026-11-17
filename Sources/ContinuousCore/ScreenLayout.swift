@@ -237,18 +237,50 @@ public struct ScreenLayout: Sendable {
 
     // MARK: transitions
 
-    /// Has the pointer reached the edge that leads to the other Mac, and is it still pushing?
-    public func isLeavingLocal(at p: ScreenPoint, delta: ScreenPoint, tolerance: Double = 1) -> Bool {
+    /// How far this movement is heading *towards* the other Mac. Negative means back here.
+    ///
+    /// One number for all four arrangements, so the crossing logic does not need a switch on
+    /// the edge every time it wants to know which way you are going.
+    public func outwardComponent(of delta: ScreenPoint) -> Double {
         switch edge {
-        case .right:  return p.x >= localBounds.maxX - tolerance && delta.x > 0
-        case .left:   return p.x <= localBounds.x + tolerance && delta.x < 0
-        case .bottom: return p.y >= localBounds.maxY - tolerance && delta.y > 0
-        case .top:    return p.y <= localBounds.y + tolerance && delta.y < 0
+        case .right:  return delta.x
+        case .left:   return -delta.x
+        case .bottom: return delta.y
+        case .top:    return -delta.y
         }
     }
 
+    /// Is the pointer up against the edge that leads to the other Mac?
+    public func isAtTransferEdge(_ p: ScreenPoint, tolerance: Double = 2) -> Bool {
+        switch edge {
+        case .right:  return p.x >= localBounds.maxX - tolerance
+        case .left:   return p.x <= localBounds.x + tolerance
+        case .bottom: return p.y >= localBounds.maxY - tolerance
+        case .top:    return p.y <= localBounds.y + tolerance
+        }
+    }
+
+    /// Has a position in the combined space fallen back past the other Mac's near edge?
+    public func isPastReturnEdge(virtual p: ScreenPoint) -> Bool {
+        let remote = remoteBoundsInVirtual
+        switch edge {
+        case .right:  return p.x < remote.x
+        case .left:   return p.x >= remote.maxX
+        case .bottom: return p.y < remote.y
+        case .top:    return p.y >= remote.maxY
+        }
+    }
+
+    public func isLeavingLocal(at p: ScreenPoint, delta: ScreenPoint, tolerance: Double = 2) -> Bool {
+        isAtTransferEdge(p, tolerance: tolerance) && outwardComponent(of: delta) > 0
+    }
+
     /// Where the pointer should appear on the other Mac, in that Mac's own coordinates.
-    public func entryPoint(leavingLocalAt p: ScreenPoint, inset: Double = 2) -> ScreenPoint {
+    ///
+    /// The inset is deliberately generous. Arriving a pixel or two inside the far screen puts
+    /// the pointer permanently against its edge, so the first small movement back the way you
+    /// came throws it straight home — which looks exactly like a second cursor appearing.
+    public func entryPoint(leavingLocalAt p: ScreenPoint, inset: Double = 24) -> ScreenPoint {
         let remoteVirtual = remoteBoundsInVirtual
         var entry = p
         switch edge {
@@ -260,18 +292,12 @@ public struct ScreenLayout: Sendable {
         return clampToRemote(virtual: entry)
     }
 
-    /// Has the pointer come back past the shared edge into our own screens?
     public func isReturningToLocal(virtual p: ScreenPoint, delta: ScreenPoint) -> Bool {
-        switch edge {
-        case .right:  return p.x < localBounds.maxX && delta.x < 0
-        case .left:   return p.x >= localBounds.x && delta.x > 0
-        case .bottom: return p.y < localBounds.maxY && delta.y < 0
-        case .top:    return p.y >= localBounds.y && delta.y > 0
-        }
+        isPastReturnEdge(virtual: p) && outwardComponent(of: delta) < 0
     }
 
     /// Where the pointer should reappear on this Mac, in this Mac's own coordinates.
-    public func returnPoint(enteringLocalAt p: ScreenPoint, inset: Double = 2) -> ScreenPoint {
+    public func returnPoint(enteringLocalAt p: ScreenPoint, inset: Double = 24) -> ScreenPoint {
         var entry = p
         switch edge {
         case .right:  entry.x = localBounds.maxX - inset

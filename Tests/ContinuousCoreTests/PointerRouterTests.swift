@@ -21,6 +21,18 @@ private func router(edge: ScreenEdge = .right,
 private let push = ScreenPoint(x: 8, y: 0)
 private let pull = ScreenPoint(x: -8, y: 0)
 
+/// Leans on the shared edge until the pointer goes through, the way a hand would.
+@discardableResult
+private func crossOver(_ r: inout PointerRouter,
+                       at point: ScreenPoint = ScreenPoint(x: 3389, y: 556)) -> ScreenPoint? {
+    for _ in 0..<40 {
+        if case let .cross(entry) = r.pointerMoved(localLocation: point, delta: push) {
+            return entry
+        }
+    }
+    return nil
+}
+
 @Suite("Pointer routing")
 struct PointerRouterTests {
 
@@ -64,23 +76,89 @@ struct PointerRouterTests {
 
     // MARK: crossing
 
-    @Test("pushing off the shared edge crosses over")
+    @Test("leaning on the shared edge crosses over")
     func crossing() throws {
         var r = router()
-        let decision = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
-        guard case let .cross(entry) = decision else {
-            Issue.record("expected a crossing, got \(decision)"); return
+        guard let entry = crossOver(&r) else {
+            Issue.record("never crossed over"); return
         }
         #expect(r.isRemote)
         #expect(remoteScreens.contains { $0.rect.contains(entry) },
                 "arrived at \(entry), which is on no screen")
-        #expect(entry.x < 20, "should arrive just inside their left edge")
+        #expect(entry.x > 8 && entry.x < 60,
+                "should arrive a comfortable way inside their left edge, got \(entry)")
+    }
+
+    // MARK: the bug this pressure logic exists for
+
+    /// The reported symptom: cross to the other Mac, move a little back the way you came, and
+    /// the pointer snaps home — leaving one cursor stranded on the far screen and another
+    /// moving here. It happened because the pointer arrived two pixels inside the far edge, so
+    /// any movement back at all was already "past the edge".
+    @Test("a small movement back after crossing does not bounce the pointer home")
+    func noBounceBackAfterCrossing() {
+        var r = router()
+        crossOver(&r)
+        #expect(r.isRemote)
+
+        // A few small nudges back the way we came, as a hand naturally does on arrival.
+        for step in 1...3 {
+            let decision = r.pointerMoved(localLocation: .init(x: 0, y: 0),
+                                          delta: ScreenPoint(x: -4, y: 0))
+            guard case .forward = decision else {
+                Issue.record("nudge \(step) bounced the pointer home: \(decision)"); return
+            }
+        }
+        #expect(r.isRemote, "the pointer should still be on the other Mac")
+    }
+
+    @Test("moving freely around the far screen never bounces home")
+    func freeMovementStaysRemote() {
+        var r = router()
+        crossOver(&r)
+        // A wander that goes left as often as right, well inside the far screen.
+        var x = 0.0
+        for step in 0..<400 {
+            let dx: Double = (step % 7 < 3) ? -9 : 11
+            x += dx
+            let decision = r.pointerMoved(localLocation: .init(x: 0, y: 0),
+                                          delta: ScreenPoint(x: dx, y: Double((step % 5) - 2)))
+            if case .comeBack = decision {
+                Issue.record("bounced home at step \(step) after travelling \(x)px"); return
+            }
+        }
+        #expect(r.isRemote)
+    }
+
+    @Test("a deliberate push against the far edge does return it")
+    func sustainedPushReturns() {
+        var r = router()
+        crossOver(&r)
+        var returned = false
+        for _ in 0..<60 where !returned {
+            if case .comeBack = r.pointerMoved(localLocation: .init(x: 0, y: 0), delta: pull) {
+                returned = true
+            }
+        }
+        #expect(returned, "leaning on the far edge should bring the pointer back")
+        #expect(!r.isRemote)
+    }
+
+    @Test("grazing the local edge without pushing does not cross")
+    func grazingDoesNotCross() {
+        var r = router()
+        // Alternating in and out at the edge: pressure must not accumulate across reversals.
+        for _ in 0..<50 {
+            _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: ScreenPoint(x: 6, y: 0))
+            _ = r.pointerMoved(localLocation: ScreenPoint(x: 3380, y: 556), delta: ScreenPoint(x: -6, y: 0))
+        }
+        #expect(!r.isRemote, "a wobble at the edge should not hand the pointer over")
     }
 
     @Test("while remote, movement is forwarded and stays on a real screen")
     func forwarding() {
         var r = router()
-        _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+        crossOver(&r)
 
         for step in 0..<200 {
             let delta = ScreenPoint(x: 7, y: step % 3 == 0 ? 5 : -4)
@@ -97,11 +175,11 @@ struct PointerRouterTests {
     @Test("pushing back across the edge returns the pointer here")
     func comingBack() {
         var r = router()
-        _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+        crossOver(&r)
         #expect(r.isRemote)
 
         var came: ScreenPoint?
-        for _ in 0..<40 {
+        for _ in 0..<80 {
             if case let .comeBack(local) = r.pointerMoved(localLocation: .init(x: 0, y: 0), delta: pull) {
                 came = local
                 break
@@ -111,7 +189,7 @@ struct PointerRouterTests {
         #expect(!r.isRemote)
         #expect(localScreens.contains { $0.rect.contains(local) },
                 "came back to \(local), which is on no screen")
-        #expect(local.x > 3360, "should reappear near the edge it left from, got \(local)")
+        #expect(local.x > 3330, "should reappear near the edge it left from, got \(local)")
     }
 
     /// Holding the pointer against the far edge must not build up an invisible offset —
@@ -119,7 +197,7 @@ struct PointerRouterTests {
     @Test("pushing into the far edge does not accumulate an offset")
     func noAccumulationAtTheFarEdge() {
         var r = router()
-        _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+        crossOver(&r)
 
         // Shove hard into the right-hand edge of the other Mac for a long time.
         for _ in 0..<500 {
@@ -139,7 +217,7 @@ struct PointerRouterTests {
             }
         }
         #expect(returned, "never came back after \(steps) steps of travel")
-        #expect(steps < 200, "took \(steps) steps, which means an offset accumulated")
+        #expect(steps < 220, "took \(steps) steps, which means an offset accumulated")
     }
 
     // MARK: forced returns
@@ -147,7 +225,7 @@ struct PointerRouterTests {
     @Test("forceLocal brings the pointer back from anywhere")
     func forcedReturn() {
         var r = router()
-        _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+        crossOver(&r)
         #expect(r.isRemote)
 
         let returned = r.forceLocal()
@@ -162,7 +240,7 @@ struct PointerRouterTests {
         #expect(r.forceLocal() == nil)
         #expect(!r.isRemote)
         // ...and twice in a row, since several safety paths can fire together.
-        _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+        crossOver(&r)
         #expect(r.forceLocal() != nil)
         #expect(r.forceLocal() == nil)
     }
@@ -170,7 +248,7 @@ struct PointerRouterTests {
     @Test("after a forced return, movement is passed through again")
     func afterForcedReturnInputFlowsLocally() {
         var r = router()
-        _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+        crossOver(&r)
         _ = r.forceLocal()
         #expect(r.pointerMoved(localLocation: ScreenPoint(x: 700, y: 400), delta: push) == .passThrough)
     }
@@ -180,7 +258,7 @@ struct PointerRouterTests {
     @Test("replacing the layout brings the pointer back first")
     func layoutChangeReturnsPointer() {
         var r = router()
-        _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+        crossOver(&r)
         #expect(r.isRemote)
 
         // The monitor has just been switched to the work Mac: it leaves us, joins them.
@@ -193,8 +271,7 @@ struct PointerRouterTests {
         #expect(destination != nil)
 
         // And the new arrangement works: crossing now lands on the monitor.
-        guard case let .cross(entry) = r.pointerMoved(localLocation: ScreenPoint(x: 1469, y: 478),
-                                                      delta: push) else {
+        guard let entry = crossOver(&r, at: ScreenPoint(x: 1469, y: 478)) else {
             Issue.record("could not cross over after the switch"); return
         }
         #expect(display(-1920, 32, 1920, 1080).rect.contains(entry),
@@ -204,7 +281,7 @@ struct PointerRouterTests {
     @Test("clearing the layout stops any swallowing")
     func clearingLayoutStopsSwallowing() {
         var r = router()
-        _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+        crossOver(&r)
         _ = r.replaceLayout(nil)
         #expect(!r.isRemote)
         #expect(r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push) == .passThrough)
@@ -215,7 +292,7 @@ struct PointerRouterTests {
     @Test("a click while remote carries the current position")
     func clickPosition() {
         var r = router()
-        _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+        crossOver(&r)
         for _ in 0..<20 { _ = r.pointerMoved(localLocation: .init(x: 0, y: 0), delta: ScreenPoint(x: 11, y: 7)) }
 
         let current = r.currentRemotePoint()
@@ -244,13 +321,15 @@ struct PointerRouterTests {
         case .top:    at = .init(x: 735, y: 0);               outward = .init(x: 0, y: -9); inward = .init(x: 0, y: 9)
         }
 
-        guard case let .cross(entry) = r.pointerMoved(localLocation: at, delta: outward) else {
-            Issue.record("\(edge): did not cross over"); return
+        var entry: ScreenPoint?
+        for _ in 0..<40 where entry == nil {
+            if case let .cross(e) = r.pointerMoved(localLocation: at, delta: outward) { entry = e }
         }
+        guard let entry else { Issue.record("\(edge): did not cross over"); return }
         #expect(remoteScreens.contains { $0.rect.contains(entry) }, "\(edge): entry \(entry) is on no screen")
 
         var returned = false
-        for _ in 0..<400 where !returned {
+        for _ in 0..<600 where !returned {
             if case .comeBack = r.pointerMoved(localLocation: .init(x: 0, y: 0), delta: inward) {
                 returned = true
             }

@@ -87,6 +87,15 @@ continuous connect 192.168.1.42        # or straight by address
 Then **push the pointer off the edge of your screen** towards the other Mac. It crosses over,
 and your keyboard goes with it. Push back the other way to return.
 
+You have to *push* against the edge to go through it — about 24 points of travel — so a stray
+movement near the edge will not throw the pointer across. The same applies coming back. If that
+feels too sticky or too eager:
+
+```bash
+continuous config set edgePressure 12     # quicker to cross
+continuous config set edgePressure 40     # harder to cross by accident
+```
+
 Hold **⌘ ⌥ ⌃ ⇧** together at any time to bring the pointer straight back. You should not need
 it — the pointer also returns on its own if the link drops, if the other Mac goes quiet for
 four seconds, or if macOS disables the event tap — but it is there, it is checked before
@@ -204,6 +213,11 @@ have to grant both permissions again. One command fixes that for good:
 ```bash
 Scripts/create-signing-identity.sh
 ```
+
+(If you ran an earlier version of this and saw *"MAC verification failed during PKCS12 import"*,
+that was a bug in the script, not your Mac: it built the certificate bundle with an empty
+password, which macOS rejects, and with OpenSSL 3's default algorithms, which macOS cannot
+read. Both are fixed — just run it again.)
 
 It creates a self-signed code-signing certificate in your login keychain, trusted by nothing
 but your own Mac. `Scripts/build.sh` picks it up automatically and the app then keeps one

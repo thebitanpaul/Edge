@@ -22,6 +22,15 @@ public struct PointerRouter: Sendable {
         case comeBack(local: ScreenPoint)
     }
 
+    /// How far you must push against an edge before the pointer goes through it.
+    ///
+    /// Without this a single pixel of movement crosses, which is fine going out — the screen
+    /// edge stops the cursor and you naturally keep pushing — but wrong coming back. The
+    /// pointer arrives near the far screen's edge, so the first movement back the way you came
+    /// would throw it home again. Requiring sustained pressure makes both directions feel the
+    /// same: lean on the edge and you go through, graze it and you do not.
+    public var edgePressureThreshold: Double = 24
+
     public private(set) var mode: Mode = .local
     /// Position in the combined coordinate space, meaningful only while remote.
     public private(set) var virtualPointer = ScreenPoint(x: 0, y: 0)
@@ -31,7 +40,15 @@ public struct PointerRouter: Sendable {
 
     /// `nil` until the other Mac has reported its screens. Without it nothing is ever
     /// swallowed — the single most important invariant here.
-    public var layout: ScreenLayout?
+    public var layout: ScreenLayout? {
+        didSet { pressure = 0 }
+    }
+
+    /// Movement accumulated against the current edge. Reset the moment you stop pushing.
+    private var pressure: Double = 0
+
+    /// Exposed for diagnostics: how close the pointer is to going through.
+    public var edgePressure: Double { pressure }
 
     public init(layout: ScreenLayout? = nil) {
         self.layout = layout
@@ -44,9 +61,20 @@ public struct PointerRouter: Sendable {
     public mutating func pointerMoved(localLocation: ScreenPoint, delta: ScreenPoint) -> Decision {
         guard let layout else { return .passThrough }
 
+        let outward = layout.outwardComponent(of: delta)
+
         switch mode {
         case .local:
-            guard layout.isLeavingLocal(at: localLocation, delta: delta) else { return .passThrough }
+            // Pressure only builds while the pointer is actually against the edge and still
+            // heading that way; anything else resets it.
+            guard layout.isAtTransferEdge(localLocation), outward > 0 else {
+                pressure = 0
+                return .passThrough
+            }
+            pressure += outward
+            guard pressure >= edgePressureThreshold else { return .passThrough }
+
+            pressure = 0
             let entry = layout.entryPoint(leavingLocalAt: localLocation)
             mode = .remote
             departurePoint = localLocation
@@ -60,9 +88,15 @@ public struct PointerRouter: Sendable {
             moved.x += delta.x
             moved.y += delta.y
 
-            if layout.isReturningToLocal(virtual: moved, delta: delta) {
-                mode = .local
-                return .comeBack(local: layout.returnPoint(enteringLocalAt: moved))
+            if layout.isPastReturnEdge(virtual: moved), outward < 0 {
+                pressure += -outward
+                if pressure >= edgePressureThreshold {
+                    pressure = 0
+                    mode = .local
+                    return .comeBack(local: layout.returnPoint(enteringLocalAt: moved))
+                }
+            } else {
+                pressure = 0
             }
 
             let remote = layout.clampToRemote(virtual: moved)
@@ -88,6 +122,7 @@ public struct PointerRouter: Sendable {
     /// or `nil` if it was never away.
     @discardableResult
     public mutating func forceLocal() -> ScreenPoint? {
+        pressure = 0
         guard mode == .remote else { return nil }
         mode = .local
         let destination = layout?.returnPoint(enteringLocalAt: virtualPointer) ?? departurePoint

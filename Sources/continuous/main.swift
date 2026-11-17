@@ -107,6 +107,11 @@ func runConfig(_ args: Args) throws {
                 throw ContinuousError.invalidArgument("remoteAlignment must be proportional, start, center or end")
             }
             config.remoteAlignment = a.rawValue
+        case "edgePressure":
+            guard let n = Double(value), n >= 1, n <= 200 else {
+                throw ContinuousError.invalidArgument("edgePressure must be a number between 1 and 200 (points of push)")
+            }
+            config.edgePressure = n
         case "logLevel":
             guard LogLevel.parse(value) != nil else {
                 throw ContinuousError.invalidArgument("logLevel must be trace, debug, info, warn or error")
@@ -114,7 +119,7 @@ func runConfig(_ args: Args) throws {
             config.logLevel = value.lowercased()
         default:
             throw ContinuousError.invalidArgument(
-                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment or logLevel")
+                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment, edgePressure or logLevel")
         }
         try config.save()
         ok("\(key) = \(value)")
