@@ -174,3 +174,74 @@ struct PairingIdentityTests {
         #expect(back.pairings[0].manualEndpoint == "192.168.1.42:52777")
     }
 }
+
+@Suite("Short pairing codes")
+struct ShortPairingCodeTests {
+    @Test("new codes are 18 characters in three groups")
+    func shape() {
+        let code = PairingCode.generate()
+        #expect(code.secret.count == 10)
+        #expect(code.formatted.filter { $0 != "-" }.count == 18)
+        #expect(code.formatted.split(separator: "-").count == 3)
+        #expect(code.formatted.count == 20)
+    }
+
+    @Test("round-trips 300 generated codes")
+    func roundTrip() throws {
+        for _ in 0..<300 {
+            let code = PairingCode.generate()
+            #expect(try PairingCode.parse(code.formatted).secret == code.secret)
+        }
+    }
+
+    /// Pairings made before the code got shorter must keep working.
+    @Test("the old 28-character format is still accepted")
+    func legacyFormat() throws {
+        let legacy = PairingCode(secret: Data(repeating: 0xAB, count: 16))
+        #expect(legacy.formatted.filter { $0 != "-" }.count == 28)
+        let parsed = try PairingCode.parse(legacy.formatted)
+        #expect(parsed.secret == legacy.secret)
+        #expect(parsed.psk == legacy.psk)
+    }
+
+    /// Codes get pasted out of messages, mail and terminals, and arrive wrapped in whatever
+    /// that medium added. None of that is the typist's mistake to correct.
+    @Test("a pasted code survives the mess around it")
+    func forgivingPaste() throws {
+        let code = PairingCode.generate()
+        for messy in ["  \(code.formatted)  ",
+                      code.formatted.lowercased(),
+                      "\"\(code.formatted)\"",
+                      code.formatted.replacingOccurrences(of: "-", with: " "),
+                      "code: \(code.formatted)\n"] {
+            #expect(try PairingCode.parse(messy).secret == code.secret, "failed on: \(messy)")
+        }
+    }
+
+    @Test("a typo is still caught")
+    func catchesTypos() {
+        var caught = 0, tried = 0
+        for _ in 0..<60 {
+            let code = PairingCode.generate()
+            var chars = Array(code.formatted)
+            for i in chars.indices where chars[i] != "-" {
+                let original = chars[i]
+                guard let other = CrockfordBase32.alphabet.first(where: { $0 != original })
+                else { continue }
+                chars[i] = other
+                tried += 1
+                do { _ = try PairingCode.parse(String(chars)) } catch { caught += 1 }
+                chars[i] = original
+            }
+        }
+        #expect(Double(caught) / Double(tried) > 0.98, "caught \(caught) of \(tried)")
+    }
+
+    @Test("still far beyond brute force")
+    func entropy() {
+        // 10 bytes is 80 bits. The secret only has to resist an offline attack on a captured
+        // handshake; 2^80 is not a thing anyone is doing to borrow a keyboard.
+        #expect(PairingCode.secretBytes * 8 == 80)
+        #expect(Set((0..<200).map { _ in PairingCode.generate().secret }).count == 200)
+    }
+}

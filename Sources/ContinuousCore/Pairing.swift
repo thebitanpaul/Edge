@@ -1,54 +1,94 @@
 import Foundation
 import CryptoKit
 
-/// A human-typeable pairing code: 128 bits of secret plus an 8-bit checksum,
-/// rendered as 28 Crockford base32 characters in groups of four.
+/// A pairing code short enough to read off one screen and type into another.
 ///
-///     G3K9-7QMW-X2ZB-4HTR-5NPD-J8VC-AY
+///     K7M2QR-9XZB4T-WPH5N3
+///
+/// 80 bits of secret plus an 8-bit checksum, as 18 Crockford base32 characters in three
+/// groups of six. It started at 128 bits and 28 characters, which is a tiring thing to copy
+/// by hand and bought nothing: the secret only has to resist an offline attack on a captured
+/// handshake, and 2^80 is comfortably out of reach for that. Seven groups of four was the
+/// kind of security decision that gets written down and then quietly worked around.
+///
+/// Codes in the old format are still accepted, so a pairing made before this still works.
 public struct PairingCode: Sendable {
-    public let secret: Data        // 16 bytes
+    public static let secretBytes = 10
+    public static let legacySecretBytes = 16
+
+    public let secret: Data
 
     public init(secret: Data) {
-        precondition(secret.count == 16)
+        precondition(secret.count == Self.secretBytes || secret.count == Self.legacySecretBytes)
         self.secret = secret
     }
 
     public static func generate() -> PairingCode {
-        PairingCode(secret: Crypto.randomBytes(16))
+        PairingCode(secret: Crypto.randomBytes(secretBytes))
     }
 
-    private static func checksumByte(_ secret: Data) -> UInt8 {
+    private static func checksumByte<S: DataProtocol>(_ secret: S) -> UInt8 {
         var input = Data("continuous/v1/checksum".utf8)
-        input.append(secret)
+        input.append(contentsOf: secret)
         return Array(SHA256.hash(data: input))[0]
     }
 
+    /// Characters of body for a given secret length: 8 bits in, 5 bits per character out.
+    private static func bodyLength(forSecretBytes count: Int) -> Int {
+        (count * 8 + 4) / 5
+    }
+
     public var formatted: String {
-        let body = CrockfordBase32.encode(secret)                          // 26 chars
-        let sum  = CrockfordBase32.encode(Data([Self.checksumByte(secret)])) // 2 chars
-        let raw = body + sum                                                // 28 chars
-        return stride(from: 0, to: raw.count, by: 4).map { i in
+        let body = CrockfordBase32.encode(secret)
+        let sum  = CrockfordBase32.encode(Data([Self.checksumByte(secret)]))   // 2 chars
+        let raw = body + sum
+        let group = secret.count == Self.secretBytes ? 6 : 4
+        return stride(from: 0, to: raw.count, by: group).map { i in
             let s = raw.index(raw.startIndex, offsetBy: i)
-            let e = raw.index(s, offsetBy: min(4, raw.count - i))
+            let e = raw.index(s, offsetBy: min(group, raw.count - i))
             return String(raw[s..<e])
         }.joined(separator: "-")
     }
 
     public static func parse(_ input: String) throws -> PairingCode {
-        let cleaned = input.filter { $0 != "-" && !$0.isWhitespace }
-        guard cleaned.count == 28 else {
-            throw ContinuousError.badPairingCode("expected 28 characters, got \(cleaned.count)")
+        // Forgiving on the way in: people paste codes with stray spaces, quotes and line
+        // breaks, and none of that is their mistake to correct.
+        let cleaned = input.filter { CrockfordBase32.isCodeCharacter($0) }
+
+        let characters = Array(cleaned)
+        let lengths = [secretBytes, legacySecretBytes]
+
+        // Letters from surrounding prose are themselves valid code characters — "code:" alone
+        // contributes four — so dropping the punctuation is not enough. Slide a window of each
+        // valid length and take the first that checksums. The checksum is what makes this
+        // safe: a run of ordinary words will not pass it.
+        for secretCount in lengths {
+            let total = bodyLength(forSecretBytes: secretCount) + 2
+            guard characters.count >= total else { continue }
+            for start in 0...(characters.count - total) {
+                let window = String(characters[start..<(start + total)])
+                if let code = decode(window, secretBytes: secretCount) { return code }
+            }
         }
-        let bodyStr = String(cleaned.prefix(26))
-        let sumStr  = String(cleaned.suffix(2))
-        guard let body = CrockfordBase32.decode(bodyStr), body.count == 16,
-              let sum = CrockfordBase32.decode(sumStr), sum.count == 1 else {
-            throw ContinuousError.badPairingCode("contains characters outside the code alphabet")
+
+        let wanted = lengths.map { bodyLength(forSecretBytes: $0) + 2 }
+        if characters.count < wanted[0] {
+            throw ContinuousError.badPairingCode(
+                "expected \(wanted[0]) characters, got \(characters.count)")
         }
-        guard sum[sum.startIndex] == checksumByte(body) else {
-            throw ContinuousError.badPairingCode("checksum mismatch — re-check the code for a typo")
-        }
-        return PairingCode(secret: body)
+        throw ContinuousError.badPairingCode(
+            "no valid code found in that text — check it for a typo")
+    }
+
+    /// Decodes an exact-length candidate, returning nil if the checksum disagrees.
+    private static func decode(_ candidate: String, secretBytes count: Int) -> PairingCode? {
+        let bodyStr = String(candidate.prefix(bodyLength(forSecretBytes: count)))
+        let sumStr = String(candidate.suffix(2))
+        guard let body = CrockfordBase32.decode(bodyStr), body.count >= count,
+              let sum = CrockfordBase32.decode(sumStr), sum.count == 1 else { return nil }
+        let secret = body.prefix(count)
+        guard sum[sum.startIndex] == checksumByte(secret) else { return nil }
+        return PairingCode(secret: Data(secret))
     }
 
     public var psk: Data { Crypto.derivePSK(fromSecret: secret) }

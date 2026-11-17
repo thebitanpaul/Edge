@@ -38,6 +38,7 @@ let usage = """
 
   menubar                 Run the menu-bar front end (also what double-clicking does)
   status                  What is running right now, and where the pointer is
+  troubleshoot            Work out why the two Macs are not talking
   service install <ROLE>  Start at login as `listen` or `connect`
   service start|stop      Control the login item
   service uninstall       Remove it
@@ -183,6 +184,8 @@ do {
     case "selftest":    try Commands.selftest(args)
     case "permissions": try Commands.permissions(args)
     case "status":      try Commands.status(args)
+    case "troubleshoot", "why":
+                        try Commands.troubleshoot(args)
     case "service":     try Commands.service(args)
     case "layout":      try Commands.layout(args)
     case "inject-test", "selftest-inject":

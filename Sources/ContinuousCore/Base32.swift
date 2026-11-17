@@ -18,7 +18,13 @@ public enum CrockfordBase32 {
         return t
     }()
 
-    public static func encode(_ data: Data) -> String {
+    /// True for anything that could be part of a code, so everything else — spaces, quotes,
+    /// hyphens, a stray newline from a paste — can simply be dropped.
+    public static func isCodeCharacter(_ c: Character) -> Bool {
+        decodeTable[c] != nil
+    }
+
+    public static func encode<S: DataProtocol>(_ data: S) -> String {
         var out = ""
         var buffer: UInt32 = 0
         var bits = 0

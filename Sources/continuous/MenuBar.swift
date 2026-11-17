@@ -190,6 +190,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                                 : "Waiting for the other Mac…"))
             menu.addItem(disabled(waitingHint))
             if let error = state?.lastError { menu.addItem(disabled(error)) }
+            menu.addItem(action("Why is it not connecting?…", #selector(troubleshoot)))
         }
 
         menu.addItem(.separator())
@@ -225,6 +226,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(login)
 
         menu.addItem(.separator())
+        menu.addItem(action("Why is it not connecting?…", #selector(troubleshoot)))
         menu.addItem(action("Open log…", #selector(openLog)))
         menu.addItem(disabled(Runtime.version))
         menu.addItem(.separator())
@@ -465,10 +467,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(code.formatted, forType: .string)
         }
+        let key = ((try? SecretStore.load()) ?? SecretStore()).pairings.last
+            .map { String($0.keyIDHex.prefix(8)) } ?? "?"
         notify("Now the other Mac",
-               "Enter that code there, set it to the opposite role, and press Start on both. "
-               + "Until they connect, both Macs will show this pairing as “not connected yet” "
-               + "— they cannot know each other's names before they have spoken.")
+               "Enter that code there, set it to the opposite role, and press Start on both.\n\n"
+               + "Both Macs should then show key \(key) under Devices. If they do, the pairing "
+               + "matched. Until they actually connect, each shows the other as “not connected "
+               + "yet” — neither can know the other's name before they have spoken.")
         refresh()
     }
 
@@ -494,9 +499,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             store.pairings.append(Pairing(psk: code.psk, label: Self.freshLabel(in: store)))
             try store.save()
-            notify("Paired",
-                   "Press Start on both Macs. This one is set to: \(mode.title). "
-                   + "The other must be set to the opposite.")
+            let key = String((store.pairings.last?.keyIDHex ?? "").prefix(8))
+            notify("Paired — key \(key)",
+                   "Check the other Mac shows the same key under Devices; if it does, the "
+                   + "code was typed correctly.\n\nThis Mac is set to: \(mode.title). The "
+                   + "other must be set to the opposite. Then press Start on both.")
         } catch {
             notify("That code was not accepted", error.localizedDescription)
         }
@@ -696,6 +703,47 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             notify("Could not change the login item", error.localizedDescription)
         }
         refresh()
+    }
+
+    @objc private func troubleshoot() {
+        guard let executable = Bundle.main.executableURL else { return }
+        let task = Process()
+        task.executableURL = executable
+        task.arguments = ["troubleshoot"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+
+        var report: String
+        do {
+            try task.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            report = String(data: data, encoding: .utf8) ?? ""
+            // The child writes for a terminal; strip the colour codes rather than show them.
+            report = report.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "",
+                                                 options: .regularExpression)
+        } catch {
+            report = "Could not run the check: \(error.localizedDescription)"
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Why it is not connecting"
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
+        text.string = report
+        text.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        text.isEditable = false
+        text.drawsBackground = false
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
+        scroll.documentView = text
+        scroll.hasVerticalScroller = true
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: "Copy")
+        alert.addButton(withTitle: "Done")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(report, forType: .string)
+        }
     }
 
     @objc private func openLog() {

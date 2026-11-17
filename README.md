@@ -117,7 +117,33 @@ yet"*: neither can know the other's name before a handshake. Once connected, eac
 other's real computer name, and you can **Rename…** it to whatever you like.
 
 If your network blocks Bonjour — common on managed networks — use **Devices ▸ Set address…**
-and give the other Mac's IP. `continuous doctor` on that Mac prints it. Everything below still works from the terminal; the menu runs the same
+and give the other Mac's IP. `continuous doctor` on that Mac prints it.
+
+**Both Macs should show the same key under Devices** (eight hex characters). That is derived
+from the shared secret, so it matches when and only when the code was typed correctly. It is
+the one check you can make while the two machines still cannot talk to each other.
+
+## When it will not connect
+
+```bash
+continuous troubleshoot
+```
+
+Or **menu bar ▸ Why is it not connecting?…** It checks the things that are actually wrong in
+practice and names the one that applies:
+
+* the pairing keys on the two Macs, so you can see whether the code took
+* whether the macOS firewall is blocking the Mac that lends its screen — it blocks silently,
+  and a blocked port looks exactly like nothing running
+* whether anything is advertising over Bonjour
+* whether the other Mac answers at all, answers but has nothing listening, or is simply absent
+* how long a connection to it takes
+
+That last one matters more than it sounds. Pointer sharing needs a quick, steady link. If a
+connection takes more than about 150 ms, or round trips vary wildly, the pointer will feel bad
+no matter what the software does — and the fix is a **Thunderbolt or USB-C cable** between the
+two Macs, or Ethernet. Wi-Fi power saving on a laptop can turn a 10 ms link into a 200 ms one
+without anything looking wrong. Everything below still works from the terminal; the menu runs the same
 session as a child process, so the two are never out of step.
 
 ## Use it from the terminal
