@@ -50,6 +50,15 @@ public struct PointerRouter: Sendable {
     /// Exposed for diagnostics: how close the pointer is to going through.
     public var edgePressure: Double { pressure }
 
+    /// Blocks handover without affecting anything else.
+    ///
+    /// Set while a mouse button is held: dragging a window towards the far edge should move
+    /// the window, not throw the pointer onto the other Mac and leave the drag stranded
+    /// half-way across the screen.
+    public var allowCrossing: Bool = true {
+        didSet { if !allowCrossing { pressure = 0 } }
+    }
+
     public init(layout: ScreenLayout? = nil) {
         self.layout = layout
     }
@@ -67,7 +76,7 @@ public struct PointerRouter: Sendable {
         case .local:
             // Pressure only builds while the pointer is actually against the edge and still
             // heading that way; anything else resets it.
-            guard layout.isAtTransferEdge(localLocation), outward > 0 else {
+            guard allowCrossing, layout.isAtTransferEdge(localLocation), outward > 0 else {
                 pressure = 0
                 return .passThrough
             }

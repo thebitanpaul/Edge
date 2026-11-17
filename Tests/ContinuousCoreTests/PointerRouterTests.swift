@@ -144,6 +144,36 @@ struct PointerRouterTests {
         #expect(!r.isRemote)
     }
 
+    /// Dragging a window towards the far edge must move the window, not throw the pointer
+    /// onto the other Mac and leave the drag stranded half-way across the screen.
+    @Test("a held mouse button blocks crossing")
+    func heldButtonBlocksCrossing() {
+        var r = router()
+        r.allowCrossing = false
+        for _ in 0..<100 {
+            let decision = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push)
+            #expect(decision == .passThrough)
+        }
+        #expect(!r.isRemote, "a drag in progress must not hand the pointer over")
+
+        // Releasing the button makes it possible again.
+        r.allowCrossing = true
+        #expect(crossOver(&r) != nil)
+    }
+
+    @Test("blocking crossing discards any pressure already built up")
+    func blockingResetsPressure() {
+        var r = router()
+        // Push most of the way through, then start a drag.
+        for _ in 0..<2 { _ = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: push) }
+        r.allowCrossing = false
+        r.allowCrossing = true
+        // The earlier pressure must not carry over into a single-nudge crossing.
+        let decision = r.pointerMoved(localLocation: ScreenPoint(x: 3389, y: 556), delta: ScreenPoint(x: 2, y: 0))
+        #expect(decision == .passThrough)
+        #expect(!r.isRemote)
+    }
+
     @Test("grazing the local edge without pushing does not cross")
     func grazingDoesNotCross() {
         var r = router()

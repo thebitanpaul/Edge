@@ -278,7 +278,46 @@ extension Commands {
         info("and that is exactly when this Mac must keep every event for itself.")
 
         tap.stop()
+        out()
+        try checkPinningHoldsTheCursor(injector: injector)
         try checkSwallowingStopsTheLocalCursor()
+    }
+
+    /// Checks the mechanism that actually holds this Mac's cursor still.
+    ///
+    /// Unlike swallowing, this one *can* be tested with synthetic events: pinning reads the
+    /// real cursor position and corrects it, so it does not matter how the cursor came to
+    /// move. That makes it the part of the fix that can be checked without a second Mac.
+    private static func checkPinningHoldsTheCursor(injector: EventInjector) throws {
+        let park = Displays.pointerLocation
+        let main = Displays.current().first(where: \.isMain)?.rect
+            ?? ScreenRect(x: 0, y: 0, width: 800, height: 600)
+        let stray = ScreenPoint(x: main.midX + 180, y: main.midY + 110)
+
+        info("checking the cursor can be held in place…")
+        LocalPointer.allowEventsDuringWarps()
+
+        var corrections = 0
+        for _ in 0..<12 {
+            injector.move(to: stray)
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.004))
+            if LocalPointer.pin(to: park) { corrections += 1 }
+        }
+        LocalPointer.reattachToHardware()
+
+        let ended = Displays.pointerLocation
+        let drift = abs(ended.x - park.x) + abs(ended.y - park.y)
+        guard corrections > 0 else {
+            bad("the cursor never moved, so pinning could not be exercised")
+            throw ExitSilently(code: 1)
+        }
+        if drift < 2 {
+            ok("cursor pinned at \(park) through \(corrections) attempts to move it \(Int(abs(stray.x - park.x)))px away")
+        } else {
+            bad("cursor ended at \(ended), \(Int(drift))px from where it was pinned")
+            LocalPointer.warp(to: park)
+            throw ExitSilently(code: 1)
+        }
     }
 
     /// Checks that swallowed movement cannot drag this Mac's cursor along.

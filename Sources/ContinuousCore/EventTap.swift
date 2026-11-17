@@ -184,6 +184,16 @@ public extension CGEvent {
 }
 
 /// Local pointer state on the sending Mac while the other one has the pointer.
+///
+/// The documented way to freeze a Mac's cursor is `CGAssociateMouseAndMouseCursorPosition(0)`,
+/// and deleting the movement in a HID-level event tap ought to make it moot anyway. On this
+/// macOS both calls report success and the cursor moves regardless, which is how you end up
+/// with a second pointer mirroring your hand on the machine you are not using.
+///
+/// So the position is enforced rather than assumed: after every movement, check where the
+/// cursor actually is and put it back if it has strayed. Reading the location costs about
+/// 0.2 µs and a correction about 38 µs, so even at a few hundred events a second this is well
+/// under one percent of a core — cheap enough to stop guessing which API is in charge.
 public enum LocalPointer {
     /// Stops the physical device from moving this Mac's own pointer.
     ///
@@ -207,6 +217,42 @@ public enum LocalPointer {
 
     public static func warp(to point: ScreenPoint) {
         CGWarpMouseCursorPosition(CGPoint(x: point.x, y: point.y))
+    }
+
+    /// Where the cursor actually is, as opposed to where it was last put.
+    public static var location: ScreenPoint {
+        guard let event = CGEvent(source: nil) else { return ScreenPoint(x: 0, y: 0) }
+        return ScreenPoint(x: Double(event.location.x), y: Double(event.location.y))
+    }
+
+    /// Holds the cursor at `point`, correcting it if it has moved. Returns true if it had to.
+    @discardableResult
+    public static func pin(to point: ScreenPoint, tolerance: Double = 0.5) -> Bool {
+        let now = location
+        guard abs(now.x - point.x) > tolerance || abs(now.y - point.y) > tolerance else {
+            return false
+        }
+        CGWarpMouseCursorPosition(CGPoint(x: point.x, y: point.y))
+        // Warping re-couples the cursor to the hardware, so the detach has to be renewed
+        // after every correction or the next movement is free again.
+        CGAssociateMouseAndMouseCursorPosition(0)
+        return true
+    }
+
+    /// Removes the quarter-second deafness that normally follows a warp.
+    ///
+    /// Without this, pinning the cursor would suppress the very hardware events we are trying
+    /// to forward — the other Mac's pointer would stutter to a halt the moment this Mac's
+    /// cursor needed correcting.
+    public static func allowEventsDuringWarps() {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else {
+            Log.warn("could not open the session event source; pinning may suppress input")
+            return
+        }
+        source.localEventsSuppressionInterval = 0
+        source.setLocalEventsFilterDuringSuppressionState(
+            [.permitLocalMouseEvents, .permitLocalKeyboardEvents, .permitSystemDefinedEvents],
+            state: .eventSuppressionStateSuppressionInterval)
     }
 
     /// Hides the cursor on every display.

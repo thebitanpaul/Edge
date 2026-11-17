@@ -44,6 +44,8 @@ final class SharingSession {
     /// Where this Mac's cursor was parked when the pointer left.
     private var parkedAt: ScreenPoint?
     private var driftCorrections = 0
+    /// Buttons currently held down on this Mac's own mouse.
+    private var heldButtons: Set<MouseButtonID> = []
 
     var onModeChange: ((Mode) -> Void)?
 
@@ -63,6 +65,8 @@ final class SharingSession {
         try tap.start()
         self.tap = tap
         LocalPointer.installCrashSafety()
+        // Must happen before the first correction, or each one would deafen us for 250 ms.
+        LocalPointer.allowEventsDuringWarps()
     }
 
     func stop() {
@@ -114,19 +118,11 @@ final class SharingSession {
             return
         }
 
-        // Backstop against a second cursor. While the pointer is away this Mac's own cursor
-        // must not move at all; if it has, something let a movement through and the honest
-        // thing to do is put it back and say so, rather than leave two cursors on screen.
+        // Second line of defence, for the case where no movement events are arriving at all
+        // and so the per-event pinning never runs.
         guard remote, let parked else { return }
-        let actual = Displays.pointerLocation
-        let drift = abs(actual.x - parked.x) + abs(actual.y - parked.y)
-        guard drift > 2 else { return }
-
-        LocalPointer.warp(to: parked)
-        lock.lock(); driftCorrections += 1; let count = driftCorrections; lock.unlock()
-        if count == 1 || count % 25 == 0 {
-            Log.warn("local cursor drifted \(Int(drift))px while the pointer was away — put it back (correction \(count))")
-            Log.warn("tap level: \(tap?.location == .cghidEventTap ? "HID" : "session"), pointer detached: \(pointerDetached)")
+        if LocalPointer.pin(to: parked) {
+            lock.lock(); driftCorrections += 1; lock.unlock()
         }
     }
 
@@ -163,6 +159,24 @@ final class SharingSession {
         // No link or no known arrangement: never swallow anything.
         guard haveLayout, let currentLink else { return event }
 
+        // A held button means a drag is in progress on this Mac. Crossing mid-drag strands
+        // whatever you were dragging, so note the state and let the router refuse.
+        switch type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            if let b = event.mouseButtonID {
+                lock.lock(); heldButtons.insert(b); router.allowCrossing = false; lock.unlock()
+            }
+        case .leftMouseUp, .rightMouseUp, .otherMouseUp:
+            if let b = event.mouseButtonID {
+                lock.lock()
+                heldButtons.remove(b)
+                router.allowCrossing = heldButtons.isEmpty
+                lock.unlock()
+            }
+        default:
+            break
+        }
+
         let isMovement = type == .mouseMoved || type == .leftMouseDragged
             || type == .rightMouseDragged || type == .otherMouseDragged
 
@@ -180,10 +194,20 @@ final class SharingSession {
                             flags: event.flags.rawValue)
                 return nil
             case let .forward(remotePoint):
-                lock.lock(); forwarded += 1; lock.unlock()
                 let delta = event.pointerDelta
                 currentLink.send(.mouseMove(x: Int32(remotePoint.x), y: Int32(remotePoint.y),
                                             dx: Int32(delta.x), dy: Int32(delta.y)))
+
+                // Hold this Mac's own cursor still. Swallowing the event and detaching the
+                // pointer both report success and neither actually stops it, so the position
+                // is checked and corrected on every single movement instead.
+                lock.lock()
+                forwarded += 1
+                let parked = parkedAt
+                lock.unlock()
+                if let parked, LocalPointer.pin(to: parked) {
+                    lock.lock(); driftCorrections += 1; lock.unlock()
+                }
                 return nil
             case let .comeBack(local):
                 finishReturn(to: local, link: currentLink, reason: "pointer came back")
@@ -212,7 +236,7 @@ final class SharingSession {
         LocalPointer.warp(to: departure)
         pointerDetached = LocalPointer.detachFromHardware()
         cursorHidden = LocalPointer.hide()
-        lock.lock(); parkedAt = departure; lock.unlock()
+        lock.lock(); parkedAt = departure; driftCorrections = 0; lock.unlock()
         Log.debug("pointer left this Mac at \(departure) → arrived at \(entry) on the other")
         if !cursorHidden {
             Log.debug("could not hide the local cursor; it will sit parked at the edge instead")
@@ -241,10 +265,13 @@ final class SharingSession {
         lock.lock()
         parkedAt = nil
         let corrections = driftCorrections
+        let moves = forwarded
         driftCorrections = 0
         lock.unlock()
         if corrections > 0 {
-            Log.debug("corrected the local cursor \(corrections) time(s) during that trip")
+            // Expected to be most of them: see the note on LocalPointer.
+            Log.debug("held this Mac's cursor still through \(corrections) of \(moves) movements "
+                      + "(tap: \(tap?.location == .cghidEventTap ? "HID" : "session"), detach reported \(pointerDetached ? "success" : "failure"))")
         }
 
         Log.debug("pointer back on this Mac (\(reason))")
