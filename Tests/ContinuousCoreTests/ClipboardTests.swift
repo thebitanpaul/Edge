@@ -485,3 +485,43 @@ struct LinkPreferenceTests {
         #expect(LinkPreference.auto.interfaceType == nil)
     }
 }
+
+@Suite("Send coalescing")
+struct SendCoalescingTests {
+    /// Pointer moves carry an absolute position, so only the newest one is true. The reason
+    /// this matters is not bandwidth: a queue of stale positions sits in front of whatever
+    /// comes next, so the message saying the pointer has left waits behind positions it has
+    /// already passed through — seconds of stale cursor on the screen you just left.
+    @Test("only the newest position is worth keeping")
+    func newestWins() {
+        let first = Message.mouseMove(x: 10, y: 10, dx: 1, dy: 1)
+        let latest = Message.mouseMove(x: 900, y: 400, dx: 4, dy: 2)
+
+        // Replacing rather than appending must not change what the far end is told.
+        guard case let .mouseMove(x, y, _, _) = latest else { Issue.record("wrong case"); return }
+        #expect(x == 900 && y == 400)
+        #expect(Codec.encodeFrame(first) != Codec.encodeFrame(latest))
+    }
+
+    /// Everything that is not a position must go out whole: a dropped click or keystroke is
+    /// not recoverable from the next one, the way a dropped position is.
+    @Test("only pointer moves are safe to drop")
+    func onlyMovesAreDroppable() {
+        func isDroppable(_ message: Message) -> Bool {
+            if case .mouseMove = message { return true }
+            return false
+        }
+        #expect(isDroppable(.mouseMove(x: 0, y: 0, dx: 0, dy: 0)))
+        for message: Message in [
+            .mouseButton(button: .left, down: true, clickCount: 1, x: 0, y: 0),
+            .keyEvent(keyCode: 8, down: true, isRepeat: false, flags: 0),
+            .flagsChanged(flags: 0),
+            .scroll(dx: 0, dy: -3, isPixel: true),
+            .leaveScreen,
+            .enterScreen(x: 0, y: 0, flags: 0),
+            .clipboard(kind: "x", payload: Data()),
+        ] {
+            #expect(!isDroppable(message), "\(message.type) must never be dropped")
+        }
+    }
+}

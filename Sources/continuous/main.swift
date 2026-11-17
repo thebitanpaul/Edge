@@ -29,6 +29,7 @@ let usage = """
   permissions             Show privacy permissions, and how to grant them
 
   pair nearby             Pair with another Mac — run it on both, nothing to type
+  pair nearby --address <A>   ...or dial it, where discovery is blocked
   pair list               Show stored pairings
   pair forget <NAME>      Delete a pairing and stop accepting its key
 

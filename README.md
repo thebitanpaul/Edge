@@ -110,8 +110,12 @@ over a cable between them.
 Neither Mac can end up with a key the other does not have: they agree one over the network, so
 either both save the same secret or neither saves anything.
 
-If this network blocks discovery, the waiting dialog offers **Enter its address…** — the same
-exchange, dialled directly. A pairing appears under **Devices** once it has connected.
+If this network blocks discovery, the waiting window lists **this Mac's own addresses** — type
+one of them into the other Mac under *Connect to a nearby Mac ▸ Enter the other Mac's
+address…*, and the same exchange happens over a direct connection. An address beginning
+`169.254` is the cable.
+
+A pairing appears under **Devices** once it has connected.
 
 There used to be a typed code. It is gone, and not because it was fiddly: it is two separate
 manual actions with no feedback until much later, so re-pairing one Mac and not the other left
@@ -127,14 +131,14 @@ cable just as it does over Wi-Fi.
 
 ### The rest of setup
 
-First time, choose **Set up…**. It asks the two questions in order and explains both:
+First time, choose **Set up…** on each Mac. One question:
 
-1. **What should this Mac do?** One Mac shares its keyboard and mouse; the other lends its
-   screen. *Set the other Mac to the opposite* — if both pick the same, neither dials and
-   nothing connects.
-2. **Pair them.** One secret code, shared between the two. It does not matter which Mac
-   creates it, and it has no bearing on which Mac shares its keyboard — that is the separate
-   choice you just made.
+* **Primary** — the Mac whose keyboard and mouse you use
+* **Secondary** — the Mac it reaches onto
+
+Set the other Mac to the opposite; if both are the same, neither connects. Pairing starts
+straight away, so that is the whole of setup. Both Macs need to be on the same Wi-Fi network,
+or joined by a USB-C or Thunderbolt cable.
 
 Then press **Start** on both.
 
@@ -383,6 +387,9 @@ be set to incompatible links and left unable to reach each other.
 `auto` already prefers a cable when it finds one; the setting is there to insist, or to stay
 on Wi-Fi. Measured between the two Macs this was written for: **1.2 ms over the cable against
 236 ms over Wi-Fi**.
+
+This is per-Mac and the two need not agree: it only governs how *this* Mac connects out, and
+a Mac that is listening accepts whichever link you arrive on.
 
 **Menu bar ▸ Connect over ▸ Cable**, or:
 

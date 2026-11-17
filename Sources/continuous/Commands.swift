@@ -111,12 +111,23 @@ enum Commands {
     private static func pairNearby(_ args: Args) throws {
         let identity = try Identity.loadOrCreate()
         let config = try Config.load()
-        let session = NetworkPairingSession(identity: identity, link: config.link)
+        let session = NetworkPairingSession(identity: identity, link: config.link,
+                                            address: args.string("address"))
 
         out()
         info("looking for another Mac that is also pairing…")
         out(Style.dim("  Run `continuous pair nearby` on the other Mac too, within two minutes."))
         out()
+        let addresses = NetworkAddress.localAddresses()
+        if !addresses.isEmpty {
+            out("  This Mac is at:  \(Style.cyan(addresses.joined(separator: "   ")))")
+            if let cable = addresses.first(where: NetworkAddress.isLinkLocalIPv4) {
+                out(Style.dim("  \(cable) is the cable between the two Macs — quicker than Wi-Fi."))
+            }
+            out(Style.dim("  If they do not find each other, give one of those to the other Mac:"))
+            out(Style.dim("      continuous pair nearby --address <this Mac's address>"))
+            out()
+        }
 
         let state = Box<NetworkPairingSession.Progress?>(nil)
         session.onProgress = { state.value = $0 }

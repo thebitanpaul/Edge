@@ -227,7 +227,10 @@ public final class NetworkPairingSession {
         // which Bonjour collapses into one record, so each sees only itself. Letting the
         // second bind fail is what makes it take a different port and become visible.
         parameters.includePeerToPeer = true
-        if let required = link.interfaceType { parameters.requiredInterfaceType = required }
+        // No interface requirement while pairing, whatever the link preference says. A Mac
+        // set to Wi-Fi would otherwise refuse to pair over a cable, and a Mac set to cable
+        // cannot require that interface at all because it appears in no path. Pairing happens
+        // once; it should use whatever reaches the other Mac.
 
         // An ephemeral port, not a fixed one. Bonjour carries whatever port is bound, so
         // nothing needs to agree on a number in advance — and two instances on one machine
@@ -307,7 +310,10 @@ public final class NetworkPairingSession {
         }
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = true
-        if let required = link.interfaceType { parameters.requiredInterfaceType = required }
+        // No interface requirement while pairing, whatever the link preference says. A Mac
+        // set to Wi-Fi would otherwise refuse to pair over a cable, and a Mac set to cable
+        // cannot require that interface at all because it appears in no path. Pairing happens
+        // once; it should use whatever reaches the other Mac.
         queue.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self, self.connection == nil, !self.finished else { return }
             self.adopt(NWConnection(to: endpoint, using: parameters), asInitiator: true)

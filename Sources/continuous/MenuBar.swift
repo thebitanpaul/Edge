@@ -17,9 +17,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case client  // lend this Mac's screen
 
         var argument: String { self == .host ? "connect" : "listen" }
+        /// "Primary" and "secondary" rather than "share" and "lend".
+        ///
+        /// The old wording described what each Mac does for the other, which is the wrong
+        /// way round for someone deciding which to pick: you know which Mac you are sitting
+        /// at long before you know what it will be doing for the other one.
         var title: String {
-            self == .host ? "Share my keyboard & mouse" : "Lend my screen"
+            self == .host ? "Primary — this Mac's keyboard and mouse"
+                          : "Secondary — controlled by the other Mac"
         }
+
+        var shortTitle: String { self == .host ? "Primary" : "Secondary" }
+
+        var opposite: Mode { self == .host ? .client : .host }
         var runtimeRole: RuntimeState.Role { self == .host ? .sharing : .listening }
     }
 
@@ -175,7 +185,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         if !isRunning {
             menu.addItem(disabled("Not running"))
-            menu.addItem(disabled("This Mac: \(mode.title.lowercased())"))
+            menu.addItem(disabled("This Mac is the \(mode.shortTitle.lowercased()) device"))
         } else if let state, state.connected {
             menu.addItem(disabled("Connected to \(state.peerName ?? "the other Mac")"))
             if mode == .host {
@@ -198,7 +208,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(action(isRunning ? "Stop" : "Start", #selector(toggleRunning)))
 
-        let modeItem = NSMenuItem(title: "This Mac", action: nil, keyEquivalent: "")
+        let modeItem = NSMenuItem(title: "This Mac is: \(mode.shortTitle)", action: nil,
+                                  keyEquivalent: "")
         let modeMenu = NSMenu()
         modeMenu.addItem(disabled("The other Mac must be set to the opposite"))
         for candidate in [Mode.host, .client] {
@@ -234,8 +245,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             linkMenu.addItem(entry)
         }
         linkMenu.addItem(.separator())
+        linkMenu.addItem(disabled("Only affects how this Mac connects out."))
+        linkMenu.addItem(disabled("The other Mac can be set differently —"))
+        linkMenu.addItem(disabled("it accepts whichever link you arrive on."))
+        linkMenu.addItem(.separator())
         linkMenu.addItem(disabled("A USB-C or Thunderbolt cable between the"))
-        linkMenu.addItem(disabled("two Macs is far quicker than Wi-Fi"))
+        linkMenu.addItem(disabled("two Macs is far quicker than Wi-Fi."))
         linkItem.submenu = linkMenu
         menu.addItem(linkItem)
 
@@ -253,51 +268,40 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: Setup
 
-    /// One place that explains the two decisions and makes both of them, in order.
+    /// One screen, one decision, and pairing starts straight away.
     ///
-    /// They were previously separate menu items with nothing tying them together, and the
-    /// result was a reasonable question with no answer in the interface: does it matter which
-    /// Mac shows the pairing code, and does that decide which one shares its keyboard? (No,
-    /// and no.) Pairing is symmetric; the role is a separate choice; and if both Macs pick the
-    /// same role nothing connects and nothing says why.
+    /// It used to ask which role, then ask separately whether to pair, then open a third
+    /// window to do it. Three steps for what is really one question — *which Mac am I sitting
+    /// at?* — and the wording described each Mac in terms of what it does for the other,
+    /// which is the wrong way round for someone trying to choose.
     @objc private func runSetup() {
-        let roleAlert = NSAlert()
-        roleAlert.messageText = "What should this Mac do?"
-        roleAlert.informativeText =
-            "Continuous needs one Mac of each kind.\n\n"
-            + "Share its keyboard & mouse — you use this Mac's keyboard, and the pointer "
-            + "crosses onto the other screen.\n\n"
-            + "Lend its screen — this Mac is driven by the other one's keyboard.\n\n"
-            + "Set the other Mac to the opposite. If both are set the same, neither will "
-            + "connect."
-        roleAlert.addButton(withTitle: "Share its keyboard & mouse")
-        roleAlert.addButton(withTitle: "Lend its screen")
-        roleAlert.addButton(withTitle: "Cancel")
+        let alert = NSAlert()
+        alert.messageText = "Which Mac is this?"
+        alert.informativeText =
+            "Primary is the Mac whose keyboard and mouse you use. Secondary is the one it "
+            + "reaches onto. Set the other Mac to the opposite — if both are the same, "
+            + "neither connects.\n\n"
+            + "Before you start, make sure both Macs are on the same Wi-Fi network, or "
+            + "connected to each other with a USB-C or Thunderbolt cable."
+        alert.addButton(withTitle: "Primary — I use this Mac's keyboard")
+        alert.addButton(withTitle: "Secondary — control it from the other Mac")
+        alert.addButton(withTitle: "Cancel")
 
-        let answer = roleAlert.runModal()
+        let answer = alert.runModal()
         guard answer != .alertThirdButtonReturn else { return }
         setMode(answer == .alertFirstButtonReturn ? .host : .client, restart: false)
 
         let store = (try? SecretStore.load()) ?? SecretStore()
-        if !store.pairings.isEmpty {
-            notify("Set to: \(mode.title)",
-                   "This Mac is already paired. Press Start here and on the other Mac.")
+        guard store.pairings.filter(\.isBound).isEmpty else {
+            notify("Set as \(mode.shortTitle)",
+                   "This Mac is already paired. Set the other Mac to \(mode.opposite.shortTitle) "
+                   + "and press Start on both.")
             refresh()
             return
         }
-
-        let pairAlert = NSAlert()
-        pairAlert.messageText = "Pair the two Macs"
-pairAlert.informativeText =
-            "Choose this on both Macs. They find each other over the network — Wi-Fi or a "
-            + "cable between them — agree a key, and show the same six digits for you to "
-            + "compare.\n\n"
-            + "Nothing is typed, so the two Macs cannot end up with different keys. None of "
-            + "it affects which Mac shares its keyboard; you have just chosen that."
-        pairAlert.addButton(withTitle: "Connect to a nearby Mac")
-        pairAlert.addButton(withTitle: "Later")
-        if pairAlert.runModal() == .alertFirstButtonReturn { pairNearby() }
-        refresh()
+        // Straight into pairing: choosing a role and then being asked whether you would also
+        // like to pair is a question with only one sensible answer.
+        pairNearby()
     }
 
     /// A short line naming the likeliest reason nothing has connected yet.
@@ -305,9 +309,7 @@ pairAlert.informativeText =
     /// The commonest by far is both Macs set to the same role, and because neither one dials
     /// in that case there is nothing in any log to notice.
     private var waitingHint: String {
-        mode == .host
-            ? "Make sure the other Mac is set to “Lend my screen”"
-            : "Make sure the other Mac is set to “Share my keyboard & mouse”"
+        "Make sure the other Mac is set to \(mode.opposite.shortTitle)"
     }
 
     // MARK: Devices
@@ -487,15 +489,31 @@ pairAlert.informativeText =
 
     /// The modal half, shared by discovery and by dialling a known address.
     private func runPairing(_ session: NetworkPairingSession, allowAddressFallback: Bool) {
+        let addresses = NetworkAddress.localAddresses()
+        let cable = addresses.first(where: NetworkAddress.isLinkLocalIPv4)
+
         let waiting = NSAlert()
         waiting.messageText = "Looking for the other Mac"
         waiting.informativeText =
-            "Choose “Connect to a nearby Mac” on the other Mac too, within the next two "
-            + "minutes. They will each show the same six digits for you to compare.\n\n"
-            + "If nothing happens, this network may be blocking discovery — some managed "
-            + "ones do. You can give the other Mac's address instead."
+            "Do the same on the other Mac — Set up…, or Devices ▸ Connect to a nearby Mac. "
+            + "They will each show the same six digits for you to compare.\n\n"
+            + "This Mac is at:  " + addresses.joined(separator: "   ")
+            + (cable != nil ? "\n(\(cable!) is the cable.)" : "")
+            + "\n\nIf they do not find each other — some networks block discovery — type one "
+            + "of those addresses into the other Mac, under Connect to a nearby Mac."
         waiting.addButton(withTitle: "Cancel")
-        if allowAddressFallback { waiting.addButton(withTitle: "Enter its address…") }
+        if allowAddressFallback {
+            waiting.addButton(withTitle: "Enter the other Mac's address…")
+            // Not reachable for the first few seconds: finding each other is the normal path,
+            // and offering an escape hatch before it has had a chance to work invites people
+            // to take it.
+            if let button = waiting.buttons.last {
+                button.isEnabled = false
+                Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { _ in
+                    button.isEnabled = true
+                }
+            }
+        }
 
         // The alert is modal, so progress has to arrive as a dismissal rather than an update.
         let result = Box<NetworkPairingSession.Progress?>(nil)
@@ -580,10 +598,11 @@ pairAlert.informativeText =
     /// immediately instead of looking like a successful pairing that will not connect.
     @objc private func pairNearbyByAddress() {
         guard let address = prompt(
-            title: "Address of the other Mac",
-            explanation: "Shown on the other Mac under Devices, or by `continuous doctor`. "
-                + "Choose “Connect to a nearby Mac” over there first, then enter its address "
-                + "here.",
+            title: "The other Mac's address",
+            explanation: "On the other Mac, choose Connect to a nearby Mac. The window it "
+                + "opens lists that Mac's addresses — type one of them here.\n\n"
+                + "If the two Macs are joined by a USB-C cable, use the address beginning "
+                + "169.254: that is the cable, and it is far quicker than Wi-Fi.",
             value: "",
             placeholder: "192.168.1.42",
             confirm: "Connect"), !address.isEmpty else { return }
@@ -608,8 +627,8 @@ pairAlert.informativeText =
             restartForPairingChange()
             notify("Paired with \(outcome.peerName)",
                    "Both Macs now hold the same key — no code was typed, so they cannot differ."
-                   + "\n\nSet this Mac to \(mode.title) and the other to the opposite, then "
-                   + "press Start on both.")
+                   + "\n\nThis Mac is the \(mode.shortTitle.lowercased()) device; set the other "
+                   + "to \(mode.opposite.shortTitle.lowercased()). Then press Start on both.")
         } catch {
             notify("Could not save the pairing", error.localizedDescription)
         }

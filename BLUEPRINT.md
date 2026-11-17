@@ -460,6 +460,37 @@ that Mac still has its own trackpad, and taking it away would be worse than a st
 Instead the cursor is watched, and since nothing is being injected while the pointer is
 elsewhere, any movement means somebody is using that Mac directly and it comes straight back.
 
+#### A queue of stale positions in front of everything else
+
+Reported as a cursor that lingered a second or two on the screen just left, and as a far
+pointer that felt behind the hand. One cause for both.
+
+Every pointer move went straight to the socket, unbounded. On a slow link they pile up — and
+they pile up *in front of whatever comes next*, so the message saying the pointer has left
+waits behind positions it has already passed through. At a quarter-second round trip that is
+precisely a second or two of stale cursor. The far pointer was replaying a backlog rather than
+following anything.
+
+Pointer moves carry an absolute position, so every one but the newest is already wrong. At most
+two frames are now in flight, and a move that cannot go out immediately *replaces* the one
+waiting instead of queueing behind it. Clicks, keys, scrolls and control messages are never
+dropped — a lost click is not recoverable from the next one, the way a lost position is. The
+count of dropped positions is reported when a session ends, so a congested link is visible
+rather than merely felt.
+
+#### Pairing had the same interface bug the link had
+
+Pairing refused the interface preference's meaning in both directions: a Mac set to Wi-Fi would
+not pair over a cable, and a Mac set to cable required an interface that appears in no path.
+Pairing now ignores the preference entirely — it happens once and should use whatever reaches
+the other Mac — and the waiting window lists this Mac's own addresses, naming which one is the
+cable, so the other Mac can be told where to dial when discovery is blocked. That question —
+*which address, and where do I see it?* — had no answer anywhere in the interface.
+
+The link preference itself needed no warning in the end: a listening Mac accepts whichever link
+you arrive on, so the two Macs need not agree. The menu says so, which is better than a warning
+about a problem that does not exist.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 

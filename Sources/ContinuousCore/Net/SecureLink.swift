@@ -63,6 +63,15 @@ public final class SecureLink {
     private var timeoutWork: DispatchWorkItem?
     private var didFinish = false
 
+    /// Frames handed to the socket but not yet acknowledged by it.
+    private var inFlightSends = 0
+    /// The newest pointer position that could not go out immediately.
+    private var deferredMove: Message?
+    /// How many stale positions were dropped — a measure of how far behind the link is.
+    public private(set) var coalescedMoves = 0
+    /// Two is enough to keep the socket busy without letting a queue form behind it.
+    private static let maxInFlightSends = 2
+
     public var onReady: ((PeerInfo) -> Void)?
     public var onMessage: ((Message) -> Void)?
     public var onClose: ((Error?) -> Void)?
@@ -183,14 +192,47 @@ public final class SecureLink {
     public func send(_ message: Message) {
         queue.async { [weak self] in
             guard let self, self.phase == .ready else { return }
-            self.transmit(message)
+            self.enqueue(message)
         }
+    }
+
+    /// Keeps at most a couple of frames in flight, and never queues a stale pointer position.
+    ///
+    /// Pointer moves carry an absolute position, so the moment a newer one exists every older
+    /// one is wrong — and handing all of them to the socket does active harm on a slow link.
+    /// They pile up ahead of whatever comes next, so the message saying the pointer has left
+    /// waits behind a backlog of positions it has already passed through. On a link with a
+    /// quarter-second round trip that is the second or two of cursor left behind on the screen
+    /// you just left, and it is also why the far pointer replays your movement instead of
+    /// following it.
+    ///
+    /// So a pointer move that cannot go out now replaces the one already waiting rather than
+    /// joining a queue behind it. Everything else is sent immediately: there are never enough
+    /// clicks or keystrokes to congest anything, and dropping one would be unforgivable.
+    private func enqueue(_ message: Message) {
+        if case .mouseMove = message, inFlightSends >= Self.maxInFlightSends {
+            if deferredMove != nil { coalescedMoves += 1 }
+            deferredMove = message
+            return
+        }
+        transmit(message)
     }
 
     private func transmit(_ message: Message) {
         let frame = Codec.encodeFrame(message)
+        inFlightSends += 1
         connection.send(content: frame, completion: .contentProcessed { [weak self] error in
-            if let error { self?.finish(error: ContinuousError.transport("send failed: \(error)")) }
+            // Runs on the connection's queue, which is this link's queue.
+            guard let self else { return }
+            self.inFlightSends -= 1
+            if let error {
+                self.finish(error: ContinuousError.transport("send failed: \(error)"))
+                return
+            }
+            if let pending = self.deferredMove {
+                self.deferredMove = nil
+                self.transmit(pending)
+            }
         })
     }
 

@@ -458,7 +458,13 @@ extension Commands {
             ok("latency over \(stats.samples) samples: \(stats.summary)")
         }
         if let forwarded = sharing?.forwardedCount, forwarded > 0 {
-            info("forwarded \(forwarded) pointer events")
+            let dropped = link.coalescedMoves
+            if dropped > 0 {
+                info("forwarded \(forwarded) pointer events, dropping \(dropped) stale positions "
+                     + "the link was too slow to carry")
+            } else {
+                info("forwarded \(forwarded) pointer events")
+            }
         }
 
         state.mutate { $0.connected = false; $0.pointerIsRemote = false; $0.save() }
