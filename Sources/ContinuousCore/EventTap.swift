@@ -225,17 +225,32 @@ public enum LocalPointer {
         return ScreenPoint(x: Double(event.location.x), y: Double(event.location.y))
     }
 
-    /// Holds the cursor at `point`, correcting it if it has moved. Returns true if it had to.
+    /// Puts the cursor at `point`, unconditionally.
+    ///
+    /// Unconditionally, because asking where the cursor is first does not work here. The
+    /// position reported to this process only advances when a movement event is delivered to
+    /// it — and while the pointer is on the other Mac we delete every one of those. So the
+    /// cursor visibly moves while `location` keeps returning the spot we parked it in, a
+    /// conditional correction concludes there is nothing to correct, and a second pointer
+    /// wanders the screen. Warping costs 38 µs; checking first costs correctness.
+    public static func hold(at point: ScreenPoint) {
+        CGWarpMouseCursorPosition(CGPoint(x: point.x, y: point.y))
+        // Warping re-couples the cursor to the hardware, so the detach has to be renewed
+        // or the next movement is free again.
+        CGAssociateMouseAndMouseCursorPosition(0)
+    }
+
+    /// Corrects the cursor only if it *appears* to have moved.
+    ///
+    /// Only trustworthy when movement events are reaching this process — which is to say, in
+    /// diagnostics rather than in a live session. Returns whether it corrected anything.
     @discardableResult
     public static func pin(to point: ScreenPoint, tolerance: Double = 0.5) -> Bool {
         let now = location
         guard abs(now.x - point.x) > tolerance || abs(now.y - point.y) > tolerance else {
             return false
         }
-        CGWarpMouseCursorPosition(CGPoint(x: point.x, y: point.y))
-        // Warping re-couples the cursor to the hardware, so the detach has to be renewed
-        // after every correction or the next movement is free again.
-        CGAssociateMouseAndMouseCursorPosition(0)
+        hold(at: point)
         return true
     }
 

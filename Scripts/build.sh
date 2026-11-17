@@ -95,8 +95,40 @@ PLIST
 # Scripts/create-signing-identity.sh makes one; this picks it up automatically if it exists.
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
   echo "==> Signing as \"$SIGNING_IDENTITY\" (stable identity — permissions survive rebuilds)"
+
+  # The first signature with a new key makes the keychain put up a dialog, and codesign then
+  # waits for it indefinitely. A build that hangs with no explanation is worse than one that
+  # falls back, so give it a deadline and say what to do.
   codesign --force --sign "$SIGNING_IDENTITY" --identifier "$BUNDLE_ID" \
-           --options runtime --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
+           --options runtime --timestamp=none "$APP" >/tmp/continuous-codesign.log 2>&1 &
+  CODESIGN_PID=$!
+  WAITED=0
+  while kill -0 "$CODESIGN_PID" 2>/dev/null && [ "$WAITED" -lt 20 ]; do
+    sleep 1
+    WAITED=$((WAITED + 1))
+  done
+
+  if kill -0 "$CODESIGN_PID" 2>/dev/null; then
+    kill "$CODESIGN_PID" 2>/dev/null || true
+    wait "$CODESIGN_PID" 2>/dev/null || true
+    echo "    codesign is waiting on a keychain dialog — falling back to ad-hoc."
+    echo
+    echo "    There is probably a prompt on screen asking whether codesign may use the"
+    echo "    key \"$SIGNING_IDENTITY\". Click \"Always Allow\" and build again, or grant it"
+    echo "    once from the terminal with your login password:"
+    echo
+    echo "        security set-key-partition-list -S apple-tool:,apple:,codesign: \\"
+    echo "            -s -k \"\$(read -s -p 'login password: ' p; echo \$p)\" \\"
+    echo "            ~/Library/Keychains/login.keychain-db"
+    echo
+    echo "    Or drop the identity entirely:"
+    echo "        security delete-certificate -c \"$SIGNING_IDENTITY\""
+    echo
+    codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
+  else
+    sed 's/^/    /' /tmp/continuous-codesign.log
+  fi
+  rm -f /tmp/continuous-codesign.log
 else
   echo "==> Signing (ad-hoc)"
   codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'

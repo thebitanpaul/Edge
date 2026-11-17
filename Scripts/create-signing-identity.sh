@@ -56,14 +56,18 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
 # cannot read. `-legacy` asks for the older algorithms it does understand. LibreSSL — what
 # /usr/bin/openssl is on a stock macOS — has no such flag and does not need one.
 PW="$(openssl rand -hex 24)"
+# Written as two whole commands rather than an array of flags: macOS ships bash 3.2, where
+# expanding an *empty* array under `set -u` is itself an error — which is how this line read
+# "LEGACY[@]: unbound variable" on exactly the machines that did not need the flag.
 if openssl pkcs12 -help 2>&1 | grep -q -- -legacy; then
-  LEGACY=(-legacy)
+  openssl pkcs12 -export -legacy -out "$WORK/identity.p12" \
+    -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
+    -name "$NAME" -passout "pass:$PW" 2>/dev/null
 else
-  LEGACY=()
+  openssl pkcs12 -export -out "$WORK/identity.p12" \
+    -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
+    -name "$NAME" -passout "pass:$PW" 2>/dev/null
 fi
-openssl pkcs12 -export "${LEGACY[@]}" -out "$WORK/identity.p12" \
-  -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
-  -name "$NAME" -passout "pass:$PW" 2>/dev/null
 
 echo "==> Importing into the keychain"
 # -T lets codesign use the private key without a prompt on every single build.

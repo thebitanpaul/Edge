@@ -46,6 +46,10 @@ final class SharingSession {
     private var driftCorrections = 0
     /// Buttons currently held down on this Mac's own mouse.
     private var heldButtons: Set<MouseButtonID> = []
+    /// Re-parks the cursor between events, in case a warp made inside the tap callback is
+    /// overwritten when the window server finishes with the event we deleted.
+    private var holdTimer: DispatchSourceTimer?
+    private let holdQueue = DispatchQueue(label: "app.continuous.cursor-hold")
 
     var onModeChange: ((Mode) -> Void)?
 
@@ -118,12 +122,9 @@ final class SharingSession {
             return
         }
 
-        // Second line of defence, for the case where no movement events are arriving at all
-        // and so the per-event pinning never runs.
+        // The 8 ms timer does the holding; this just notices if it has somehow stopped.
         guard remote, let parked else { return }
-        if LocalPointer.pin(to: parked) {
-            lock.lock(); driftCorrections += 1; lock.unlock()
-        }
+        if holdTimer == nil { LocalPointer.hold(at: parked) }
     }
 
     var isRemote: Bool { lock.lock(); defer { lock.unlock() }; return router.isRemote }
@@ -205,9 +206,7 @@ final class SharingSession {
                 forwarded += 1
                 let parked = parkedAt
                 lock.unlock()
-                if let parked, LocalPointer.pin(to: parked) {
-                    lock.lock(); driftCorrections += 1; lock.unlock()
-                }
+                if let parked { LocalPointer.hold(at: parked) }
                 return nil
             case let .comeBack(local):
                 finishReturn(to: local, link: currentLink, reason: "pointer came back")
@@ -237,12 +236,32 @@ final class SharingSession {
         pointerDetached = LocalPointer.detachFromHardware()
         cursorHidden = LocalPointer.hide()
         lock.lock(); parkedAt = departure; driftCorrections = 0; lock.unlock()
+        startHolding(at: departure)
         Log.debug("pointer left this Mac at \(departure) → arrived at \(entry) on the other")
         if !cursorHidden {
             Log.debug("could not hide the local cursor; it will sit parked at the edge instead")
         }
 
         onModeChange?(.remote)
+    }
+
+    /// Pins the cursor roughly every other frame for as long as the pointer is away.
+    ///
+    /// Belt and braces alongside the per-event hold: together they mean the cursor cannot
+    /// travel more than a few milliseconds' worth of movement before being put back, which is
+    /// below the threshold of noticing.
+    private func startHolding(at point: ScreenPoint) {
+        holdTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: holdQueue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .milliseconds(2))
+        timer.setEventHandler { LocalPointer.hold(at: point) }
+        holdTimer = timer
+        timer.resume()
+    }
+
+    private func stopHolding() {
+        holdTimer?.cancel()
+        holdTimer = nil
     }
 
     private func returnToLocal(reason: String) {
@@ -257,6 +276,8 @@ final class SharingSession {
     /// The one place that restores local control. Every route back goes through it, so none
     /// of them can forget to re-attach the hardware or un-hide the cursor.
     private func finishReturn(to destination: ScreenPoint?, link: SecureLink?, reason: String) {
+        // First thing, before anything can warp the cursor back to the parking spot again.
+        stopHolding()
         link?.send(.leaveScreen)
 
         if pointerDetached { LocalPointer.reattachToHardware(); pointerDetached = false }
@@ -268,11 +289,11 @@ final class SharingSession {
         let moves = forwarded
         driftCorrections = 0
         lock.unlock()
-        if corrections > 0 {
-            // Expected to be most of them: see the note on LocalPointer.
-            Log.debug("held this Mac's cursor still through \(corrections) of \(moves) movements "
-                      + "(tap: \(tap?.location == .cghidEventTap ? "HID" : "session"), detach reported \(pointerDetached ? "success" : "failure"))")
-        }
+        _ = corrections
+        Log.debug("held this Mac's cursor still across \(moves) forwarded movements "
+                  + "(tap: \(tap?.location == .cghidEventTap ? "HID" : "session"), "
+                  + "detach reported \(pointerDetached ? "success" : "failure"), "
+                  + "hide reported \(cursorHidden ? "success" : "failure"))")
 
         Log.debug("pointer back on this Mac (\(reason))")
         onModeChange?(.local)

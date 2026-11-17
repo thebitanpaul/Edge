@@ -45,6 +45,7 @@ let usage = """
   layout set <EDGE>       Where the other Mac sits: left, right, top or bottom
   inject-test             Move this Mac's own pointer, to check Accessibility
   capture-test            Check this Mac can capture input, without connecting
+  cursor-doctor           Measure whether this Mac's cursor can be held still
   remote-test [HOST]      Drive the OTHER Mac's pointer across the link
 
   config show             Print the effective configuration
@@ -168,6 +169,8 @@ do {
                         try Commands.injectTest(args)
     case "capture-test", "selftest-capture":
                         try Commands.captureTest(args)
+    case "cursor-doctor":
+                        try Commands.cursorDoctor(args)
     case "remote-test", "selftest-remote":
                         try Commands.remoteTest(args)
     case "pair":     try Commands.pair(args)

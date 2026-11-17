@@ -202,7 +202,12 @@ after you stop using this.
 continuous permissions        # what is granted, and how to grant the rest
 continuous capture-test       # can this Mac capture input?
 continuous inject-test        # can this Mac be driven?
+continuous cursor-doctor      # can this Mac's cursor be held still?
 ```
+
+If you ever see a second pointer mirroring your hand on the Mac you are *not* using, run
+`cursor-doctor`. It reproduces the live conditions on one machine, moves nothing but your own
+mouse, and reports measurements rather than a verdict pulled from the documentation.
 
 ### Granting them once instead of after every rebuild
 
