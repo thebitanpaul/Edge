@@ -90,7 +90,8 @@ extension Commands {
         let options = LinkListener.Options(
             port: config.port,
             requireLocalNetwork: config.requireLocalNetwork,
-            bonjourName: config.bonjourEnabled ? identity.deviceName : nil)
+            bonjourName: config.bonjourEnabled ? identity.deviceName : nil,
+            link: config.link)
 
         let listener = LinkListener(identity: identity,
                                     localRole: .client,
@@ -304,7 +305,8 @@ extension Commands {
 
         let link = LinkConnector.connect(to: target.endpoint, psk: target.pairing.psk,
                                          identity: identity, localRole: .host,
-                                         capabilities: config.capabilities)
+                                         capabilities: config.capabilities,
+                                         link: config.link)
         let heartbeat = Heartbeat(link: link)
         let closed = Box<(done: Bool, error: Error?)>((false, nil))
         let clipboard = ClipboardBridge(config: config) { [weak link] message in

@@ -101,6 +101,19 @@ forgetting a Mac and changing the arrangement are all in the menu, so the termin
 rather than required. Changing the arrangement or the clipboard setting restarts the
 session, because both are read when one starts.
 
+### Pairing
+
+Choose **Devices ▸ Pair with a nearby Mac…** on *both* Macs. Each shows the same six digits;
+confirm on both. Nothing is typed, and neither Mac can end up with a key the other does not
+have — either both save the same secret or neither saves anything.
+
+If the two Macs cannot see each other on the network, there is still **Show a pairing code…**
+and **Enter a pairing code…**. Be aware of what that allows: re-pairing one Mac and not the
+other leaves them with different keys, which looks exactly like a mistyped code. Both Macs
+show their key under Devices; if those eight characters match, the pairing is right.
+
+### The rest of setup
+
 First time, choose **Set up…**. It asks the two questions in order and explains both:
 
 1. **What should this Mac do?** One Mac shares its keyboard and mouse; the other lends its
@@ -343,6 +356,19 @@ terminal.
 ## Clipboard sharing
 
 Off by default. Turn it on in the menu, or:
+
+## Over a cable
+
+A USB-C or Thunderbolt cable between the two Macs appears as an ordinary wired interface, and
+it is far quicker and steadier than Wi-Fi — which matters, because a pointer follows your hand
+and notices a slow link long before a file transfer would. With both a cable and Wi-Fi
+connected, the system is free to pick either and will usually pick Wi-Fi.
+
+**Menu bar ▸ Connect over ▸ Cable**, or:
+
+```bash
+continuous config set preferredLink cable    # auto | cable | wifi
+```
 
 ```bash
 continuous config set clipboardSharing true     # on BOTH Macs

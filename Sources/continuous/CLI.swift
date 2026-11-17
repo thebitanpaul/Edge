@@ -115,13 +115,18 @@ enum Runtime {
         return "\(base) (commit \(commit)\(built))"
     }()
 
-    /// Blocks the calling thread until `signalled` is set or the deadline passes.
-    /// Used instead of RunLoop so Ctrl-C handling stays simple and predictable.
+    /// Waits for `condition`, servicing the run loop while it waits.
+    ///
+    /// It used to sleep instead, which looks equivalent and is not: anything delivered via
+    /// `DispatchQueue.main.async` — which is how work gets back to the main thread from a
+    /// network callback — never runs while the main thread is asleep. A caller waiting on a
+    /// result that arrives that way waits for ever and then reports a timeout, with the
+    /// answer sitting undelivered in the queue the whole time.
     static func wait(until condition: @escaping () -> Bool, timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }
-            Thread.sleep(forTimeInterval: 0.02)
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
         }
         return condition()
     }

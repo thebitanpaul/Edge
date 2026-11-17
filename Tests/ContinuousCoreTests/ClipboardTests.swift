@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import AppKit
 import Network
+import CryptoKit
 @testable import ContinuousCore
 
 @Suite("Clipboard")
@@ -306,5 +307,83 @@ struct PeerSelectionTests {
         let chosen = PeerSelection.choose(from: [peer("Mystery", nil)],
                                           boundTo: nil, excluding: DeviceID())
         #expect(chosen?.serviceName == "Mystery")
+    }
+}
+
+@Suite("Pairing over the network")
+struct NetworkPairingTests {
+    /// The property that makes this worth having: both Macs necessarily end up with the same
+    /// key, where two people typing a code can end up with two different ones and no sign of it.
+    @Test("both sides derive the same key")
+    func sharedKeyMatches() throws {
+        let a = Curve25519.KeyAgreement.PrivateKey()
+        let b = Curve25519.KeyAgreement.PrivateKey()
+
+        let secretA = try a.sharedSecretFromKeyAgreement(with: b.publicKey)
+        let secretB = try b.sharedSecretFromKeyAgreement(with: a.publicKey)
+
+        let keyA = NetworkPairing.derivePSK(from: secretA)
+        let keyB = NetworkPairing.derivePSK(from: secretB)
+        #expect(keyA == keyB)
+        #expect(keyA.count == 32)
+        #expect(Crypto.deriveKeyID(fromPSK: keyA) == Crypto.deriveKeyID(fromPSK: keyB))
+    }
+
+    /// Both Macs must show the same number whichever of them dialled, or the person comparing
+    /// them is told the pairing failed when it did not.
+    @Test("the verification number does not depend on who dialled")
+    func verificationIsSymmetric() {
+        for _ in 0..<50 {
+            let a = Curve25519.KeyAgreement.PrivateKey().publicKey
+            let b = Curve25519.KeyAgreement.PrivateKey().publicKey
+            let forward = NetworkPairing.verificationDigits(a, b)
+            let backward = NetworkPairing.verificationDigits(b, a)
+            #expect(forward == backward)
+            #expect(forward.count == 6)
+            let allDigits = forward.allSatisfy { $0.isNumber }
+            #expect(allDigits)
+        }
+    }
+
+    /// A machine in the middle substitutes its own keys, which gives a different number on
+    /// each side. That only helps if the numbers are spread out.
+    @Test("different exchanges give different numbers")
+    func verificationIsWellSpread() {
+        let digits = (0..<400).map { _ in
+            NetworkPairing.verificationDigits(Curve25519.KeyAgreement.PrivateKey().publicKey,
+                                              Curve25519.KeyAgreement.PrivateKey().publicKey)
+        }
+        // With a million possibilities, 400 draws should essentially never repeat.
+        #expect(Set(digits).count >= 399)
+    }
+
+    @Test("hello messages round-trip")
+    func helloRoundTrip() throws {
+        let key = Curve25519.KeyAgreement.PrivateKey().publicKey
+        let encoded = NetworkPairing.encodeHello(publicKey: key, name: "Bitan's MacBook Air")
+        let (decodedKey, name) = try NetworkPairing.decodeHello(encoded)
+        #expect(decodedKey.rawRepresentation == key.rawRepresentation)
+        #expect(name == "Bitan's MacBook Air")
+    }
+
+    @Test("a malformed hello is refused, not guessed at")
+    func rejectsMalformed() {
+        #expect(throws: (any Error).self) { try NetworkPairing.decodeHello(Data()) }
+        #expect(throws: (any Error).self) { try NetworkPairing.decodeHello(Data([9, 1])) }
+        #expect(throws: (any Error).self) {
+            try NetworkPairing.decodeHello(Data([1, 1] + [UInt8](repeating: 0, count: 4)))
+        }
+    }
+
+    @Test("the derived key works as a pairing key like any other")
+    func derivedKeyIsUsable() throws {
+        let a = Curve25519.KeyAgreement.PrivateKey()
+        let b = Curve25519.KeyAgreement.PrivateKey()
+        let secret = try a.sharedSecretFromKeyAgreement(with: b.publicKey)
+        let psk = NetworkPairing.derivePSK(from: secret)
+        let pairing = Pairing(psk: psk, label: "Work Mac")
+        #expect(pairing.keyID.count == Wire.keyIDLength)
+        #expect(!pairing.hasGeneratedLabel)
+        _ = TLSConfig.parameters(keys: [PSKEntry(psk: psk)])
     }
 }

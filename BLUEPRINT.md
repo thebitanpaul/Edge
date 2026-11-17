@@ -354,6 +354,33 @@ it is rather than as a guess about the code.
 Both were found by probing the two Macs directly rather than reading the code: `nc` showed the
 port open, which ruled out the firewall; the TLS status was −9864, which named the cause exactly.
 
+#### Pairing by typing a code has a failure that care cannot prevent
+
+Three rounds of "pairing fails" ended with the two Macs simply holding different keys —
+`ce8f18c9` here against `f6b1c664` there. Typing a code is two separate manual actions with no
+feedback until a connection succeeds much later, and re-pairing *one* Mac silently recreates
+the divergence. Since a mismatch looks exactly like a typo, the natural response is to re-pair
+again, which is the same move that caused it. That is a trap built into the design, not a
+mistake made by the person in it.
+
+So: **Pair with a nearby Mac**. Both Macs run the same action, exchange X25519 public keys,
+and derive the same secret. Either both save the same key or neither saves anything — a
+mismatch is not reachable. An eavesdropper learns nothing, and an attacker in the middle would
+have to make the same six digits appear on both screens by chance, which is the usual numeric
+comparison from Bluetooth pairing.
+
+Typed codes remain for Macs that cannot see each other, now 18 characters rather than 28.
+
+**Found while building it:** `Runtime.wait` slept the main thread. Anything delivered through
+`DispatchQueue.main.async` — which is how a network callback gets back to the main thread —
+never ran, so a caller waiting on such a result waited for ever and then reported a timeout
+with the answer sitting undelivered in the queue. It services the run loop now. A latent bug
+on several paths, exposed because this one could not work around it.
+
+**Also:** Stop now stops a session by process id from the state file rather than only the child
+it holds a handle to — after a relaunch or a takeover that handle is nil while the session is
+very much still running, and Stop silently did nothing.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 

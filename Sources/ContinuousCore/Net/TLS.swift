@@ -13,6 +13,29 @@ public struct PSKEntry: Sendable {
     }
 }
 
+/// Which physical link to carry input over.
+public enum LinkPreference: String, CaseIterable, Sendable {
+    case auto, cable, wifi
+
+    public var title: String {
+        switch self {
+        case .auto: return "Whichever connects"
+        case .cable: return "Cable (USB-C or Thunderbolt)"
+        case .wifi: return "Wi-Fi"
+        }
+    }
+
+    /// A Thunderbolt or USB-C link between two Macs presents as a wired Ethernet interface,
+    /// which is why `cable` maps to `.wiredEthernet` rather than anything USB-shaped.
+    var interfaceType: NWInterface.InterfaceType? {
+        switch self {
+        case .auto: return nil
+        case .cable: return .wiredEthernet
+        case .wifi: return .wifi
+        }
+    }
+}
+
 public enum TLSConfig {
     /// `TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256` (RFC 7905).
     ///
@@ -36,7 +59,7 @@ public enum TLSConfig {
     /// Several keys can be installed at once, each tagged with its own identifier, so a Mac
     /// paired with more than one machine still runs a single listener and the TLS stack picks
     /// the right key from the identity the client offers.
-    public static func parameters(keys: [PSKEntry]) -> NWParameters {
+    public static func parameters(keys: [PSKEntry], link: LinkPreference = .auto) -> NWParameters {
         precondition(!keys.isEmpty, "TLS parameters need at least one pre-shared key")
 
         let tls = NWProtocolTLS.Options()
@@ -73,6 +96,9 @@ public enum TLSConfig {
         params.serviceClass = .responsiveData
         // Keep traffic on real interfaces only; never let this ride a VPN or cellular tether.
         params.prohibitedInterfaceTypes = [.cellular]
+        if let required = link.interfaceType {
+            params.requiredInterfaceType = required
+        }
         return params
     }
 

@@ -98,13 +98,103 @@ enum Commands {
     static func pair(_ args: Args) throws {
         let sub = args.arg(0) ?? "list"
         switch sub {
+        case "nearby", "network": try pairNearby(args)
         case "init":   try pairInit(args)
         case "join":   try pairJoin(args)
         case "list":   try pairList(args)
         case "forget": try pairForget(args)
         default:
-            throw ContinuousError.invalidArgument("unknown `pair` subcommand '\(sub)' — expected init, join, list or forget")
+            throw ContinuousError.invalidArgument("unknown `pair` subcommand '\(sub)' — expected nearby, init, join, list or forget")
         }
+    }
+
+    /// `continuous pair nearby` — the same exchange the menu bar runs.
+    private static func pairNearby(_ args: Args) throws {
+        let identity = try Identity.loadOrCreate()
+        let config = try Config.load()
+        let session = NetworkPairingSession(identity: identity, link: config.link)
+
+        out()
+        info("looking for another Mac that is also pairing…")
+        out(Style.dim("  Run `continuous pair nearby` on the other Mac too, within two minutes."))
+        out()
+
+        let state = Box<NetworkPairingSession.Progress?>(nil)
+        session.onProgress = { state.value = $0 }
+        session.start()
+
+        guard Runtime.wait(until: {
+            if case .verify = state.value { return true }
+            if case .failed = state.value { return true }
+            return false
+        }, timeout: NetworkPairing.window + 5) else {
+            session.cancel()
+            throw ContinuousError.timedOut("no other Mac started pairing")
+        }
+
+        if case let .failed(reason) = state.value {
+            throw ContinuousError.invalidArgument(reason)
+        }
+        guard case let .verify(digits, peerName) = state.value else {
+            throw ContinuousError.invalidArgument("pairing did not get started")
+        }
+
+        out()
+        out("  Found \(Style.bold(peerName)). Both Macs should show:")
+        out()
+        out("      \(Style.cyan(Style.bold(digits)))")
+        out()
+        out("  If \(peerName) shows the same six digits, nothing is between them.")
+        out("  Confirm on both Macs.")
+        out()
+
+        // No tty check: whether a person can answer is settled by whether an answer arrives.
+        // Requiring a terminal also rules out piping one in, which is the only way this can
+        // be tested without two people and two Macs.
+        print("  Do the numbers match? [y/N] ", terminator: "")
+        guard let line = readLine() else {
+            session.cancel()
+            throw ContinuousError.invalidArgument(
+                "nothing to read an answer from — run this where you can confirm the number")
+        }
+        let answer = line.lowercased().trimmingCharacters(in: .whitespaces)
+        guard answer == "y" || answer == "yes" else {
+            session.confirm(false)
+            throw ContinuousError.invalidArgument("pairing cancelled")
+        }
+        session.confirm(true)
+
+        info("waiting for \(peerName) to confirm…")
+        guard Runtime.wait(until: {
+            if case .done = state.value { return true }
+            if case .failed = state.value { return true }
+            return false
+        }, timeout: 120) else {
+            session.cancel()
+            throw ContinuousError.timedOut("\(peerName) did not confirm")
+        }
+
+        if case let .failed(reason) = state.value {
+            throw ContinuousError.invalidArgument(reason)
+        }
+        guard case let .done(outcome) = state.value else {
+            throw ContinuousError.invalidArgument("pairing did not finish")
+        }
+
+        var store = try SecretStore.load()
+        // Replace rather than accumulate: a leftover from a failed attempt only makes the
+        // next connection ambiguous.
+        store.pairings.removeAll { $0.peerName == outcome.peerName || !$0.isBound }
+        var pairing = Pairing(psk: outcome.psk, label: outcome.peerName)
+        pairing.peerName = outcome.peerName
+        store.pairings.append(pairing)
+        try store.save()
+
+        out()
+        ok("paired with \(outcome.peerName)  ·  key \(String(pairing.keyIDHex.prefix(8)))")
+        info("both Macs derived the same key, so they cannot differ")
+        out(Style.dim("  Now set one Mac to share its keyboard and the other to lend its screen,"))
+        out(Style.dim("  then start both:  continuous connect   /   continuous listen"))
     }
 
     private static func pairInit(_ args: Args) throws {

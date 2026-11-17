@@ -276,11 +276,20 @@ public struct Config: Codable, Sendable {
     public var clipboardImages: Bool = false
     /// Largest clipboard to carry, in bytes. Anything larger is left where it is.
     public var clipboardLimit: Int = 1 << 20
+    /// Which physical link to use: `auto`, `cable` or `wifi`.
+    ///
+    /// A USB-C or Thunderbolt cable between two Macs appears as an ordinary wired interface,
+    /// so with both a cable and Wi-Fi connected the system is free to pick either — and it
+    /// will usually pick the one with a default route, which is Wi-Fi. Saying `cable` pins it
+    /// to the link that is an order of magnitude quicker and not shared with anything else.
+    public var preferredLink: String = "auto"
     public var logLevel: String = "info"
 
     public init() {}
 
     public var edge: ScreenEdge { ScreenEdge.parse(remoteEdge) ?? .right }
+
+    public var link: LinkPreference { LinkPreference(rawValue: preferredLink) ?? .auto }
 
     /// What to tell the other Mac this one is willing to do.
     public var capabilities: Capabilities {
@@ -293,7 +302,7 @@ public struct Config: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case version, port, requireLocalNetwork, bonjourEnabled, logLevel
         case remoteEdge, remoteAlignment, edgePressure, holdLocalPointer
-        case clipboardSharing, clipboardImages, clipboardLimit
+        case clipboardSharing, clipboardImages, clipboardLimit, preferredLink
         case requirePrivateNetwork   // the name this setting had before 0.1.0
     }
 
@@ -315,6 +324,7 @@ public struct Config: Codable, Sendable {
         clipboardSharing = try c.decodeIfPresent(Bool.self, forKey: .clipboardSharing) ?? false
         clipboardImages = try c.decodeIfPresent(Bool.self, forKey: .clipboardImages) ?? false
         clipboardLimit = max(1024, try c.decodeIfPresent(Int.self, forKey: .clipboardLimit) ?? (1 << 20))
+        preferredLink = try c.decodeIfPresent(String.self, forKey: .preferredLink) ?? "auto"
         logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? "info"
     }
 
@@ -331,6 +341,7 @@ public struct Config: Codable, Sendable {
         try c.encode(clipboardSharing, forKey: .clipboardSharing)
         try c.encode(clipboardImages, forKey: .clipboardImages)
         try c.encode(clipboardLimit, forKey: .clipboardLimit)
+        try c.encode(preferredLink, forKey: .preferredLink)
         try c.encode(logLevel, forKey: .logLevel)
     }
 

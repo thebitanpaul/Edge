@@ -221,6 +221,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         clipboard.state = config.clipboardSharing ? .on : .off
         menu.addItem(clipboard)
 
+        let linkItem = NSMenuItem(title: "Connect over", action: nil, keyEquivalent: "")
+        let linkMenu = NSMenu()
+        for choice in LinkPreference.allCases {
+            let entry = NSMenuItem(title: choice.title, action: #selector(selectLink(_:)),
+                                   keyEquivalent: "")
+            entry.target = self
+            entry.state = config.link == choice ? .on : .off
+            entry.representedObject = choice.rawValue
+            linkMenu.addItem(entry)
+        }
+        linkMenu.addItem(.separator())
+        linkMenu.addItem(disabled("A USB-C or Thunderbolt cable between the"))
+        linkMenu.addItem(disabled("two Macs is far quicker than Wi-Fi"))
+        linkItem.submenu = linkMenu
+        menu.addItem(linkItem)
+
         let login = action("Start at login", #selector(toggleLoginItem))
         login.state = LaunchAgent.installedRole != nil ? .on : .off
         menu.addItem(login)
@@ -271,17 +287,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let pairAlert = NSAlert()
         pairAlert.messageText = "Pair the two Macs"
         pairAlert.informativeText =
-            "The two Macs share one secret code. It does not matter which one creates it, and "
-            + "it has no bearing on which Mac shares its keyboard — you have just chosen that "
-            + "separately.\n\n"
-            + "Create the code on whichever Mac you are sitting at, then type it on the other."
-        pairAlert.addButton(withTitle: "Create a code")
-        pairAlert.addButton(withTitle: "I have a code")
+            "The two Macs need to share one secret, and none of this affects which Mac shares "
+            + "its keyboard — you have just chosen that separately.\n\n"
+            + "Pairing over the network is the reliable way: choose it on both Macs, compare "
+            + "the six digits they show, and neither can end up with a different key. A typed "
+            + "code works too, and is there for when the two Macs cannot see each other."
+        pairAlert.addButton(withTitle: "Pair over the network")
+        pairAlert.addButton(withTitle: "Use a code instead")
         pairAlert.addButton(withTitle: "Later")
 
         switch pairAlert.runModal() {
-        case .alertFirstButtonReturn: pairNewMac()
-        case .alertSecondButtonReturn: enterPairingCode()
+        case .alertFirstButtonReturn: pairNearby()
+        case .alertSecondButtonReturn: pairNewMac()
         default: break
         }
         refresh()
@@ -319,7 +336,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         submenu.addItem(.separator())
-        submenu.addItem(action("Pair a new Mac…", #selector(pairNewMac)))
+        submenu.addItem(action("Pair with a nearby Mac…", #selector(pairNearby)))
+        submenu.addItem(disabled("…choose this on both Macs, no code needed"))
+        submenu.addItem(.separator())
+        submenu.addItem(action("Show a pairing code…", #selector(pairNewMac)))
         submenu.addItem(action("Enter a pairing code…", #selector(enterPairingCode)))
         item.submenu = submenu
         return item
@@ -449,6 +469,119 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         editPairing(labelled: label) { $0.manualEndpoint = address }
         if isRunning { stopSession(); startSession() }
+    }
+
+    /// Pairs with another Mac over the network, with no code to type.
+    ///
+    /// Both people choose the same menu item on both Macs; whichever finds the other dials.
+    /// A six-digit number appears on each, and both confirm. Either both Macs save the same
+    /// key or neither saves anything — the failure that typing a code allows, where one side
+    /// quietly ends up with a different key, cannot happen here.
+    @objc private func pairNearby() {
+        guard let identity = try? Identity.loadOrCreate() else { return }
+        let config = (try? Config.load()) ?? Config()
+        let session = NetworkPairingSession(identity: identity, link: config.link)
+
+        let waiting = NSAlert()
+        waiting.messageText = "Looking for the other Mac"
+        waiting.informativeText =
+            "Choose “Pair with a nearby Mac” on the other Mac too, within the next two minutes.\n\n"
+            + "They will each show the same six-digit number for you to compare."
+        waiting.addButton(withTitle: "Cancel")
+
+        // The alert is modal, so progress has to arrive as a dismissal rather than an update.
+        let result = Box<NetworkPairingSession.Progress?>(nil)
+        session.onProgress = { progress in
+            switch progress {
+            case .waiting, .found:
+                break
+            case .verify, .done, .failed:
+                result.value = progress
+                NSApp.abortModal()
+            }
+        }
+        session.start()
+
+        let response = waiting.runModal()
+        guard let outcome = result.value else {
+            session.cancel()
+            _ = response
+            return
+        }
+
+        guard case let .verify(digits, peerName) = outcome else {
+            if case let .failed(reason) = outcome { notify("Pairing failed", reason) }
+            session.cancel()
+            return
+        }
+
+        let compare = NSAlert()
+        compare.messageText = digits
+        compare.informativeText =
+            "Does \(peerName) show the same six digits?\n\n"
+            + "Confirm on both Macs. If the numbers differ, something is between them — say "
+            + "No and try again."
+        compare.addButton(withTitle: "Yes, they match")
+        compare.addButton(withTitle: "No")
+
+        let finish = Box<NetworkPairingSession.Progress?>(nil)
+        session.onProgress = { progress in
+            switch progress {
+            case .done, .failed:
+                finish.value = progress
+                NSApp.abortModal()
+            default:
+                break
+            }
+        }
+
+        guard compare.runModal() == .alertFirstButtonReturn else {
+            session.confirm(false)
+            return
+        }
+        session.confirm(true)
+
+        // Wait for the other Mac to confirm too.
+        let patience = NSAlert()
+        patience.messageText = "Waiting for \(peerName)"
+        patience.informativeText = "Confirm the same number over there."
+        patience.addButton(withTitle: "Cancel")
+        if finish.value == nil {
+            if patience.runModal() == .alertFirstButtonReturn, finish.value == nil {
+                session.cancel()
+                return
+            }
+        }
+
+        switch finish.value {
+        case let .done(result):
+            save(result)
+        case let .failed(reason):
+            notify("Pairing failed", reason)
+        default:
+            notify("Pairing did not finish", "The other Mac did not confirm.")
+        }
+    }
+
+    private func save(_ outcome: NetworkPairing.Outcome) {
+        do {
+            var store = try SecretStore.load()
+            // Replace rather than accumulate: a second pairing with the same Mac is only ever
+            // a leftover from a failed attempt, and two of them make dialling ambiguous.
+            store.pairings.removeAll { $0.peerName == outcome.peerName || !$0.isBound }
+            var pairing = Pairing(psk: outcome.psk, label: outcome.peerName)
+            pairing.peerName = outcome.peerName
+            store.pairings.append(pairing)
+            try store.save()
+            restartForPairingChange()
+            notify("Paired with \(outcome.peerName)",
+                   "Both Macs now hold the same key — no code was typed, so they cannot differ."
+                   + "\n\nSet this Mac to \(mode.title) and the other to the opposite, then "
+                   + "press Start on both.")
+        } catch {
+            notify("Could not save the pairing", error.localizedDescription)
+        }
+        refresh()
     }
 
     @objc private func pairNewMac() {
@@ -702,6 +835,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
+    @objc private func selectLink(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        applyConfig { $0.preferredLink = raw }
+    }
+
     @objc private func toggleLoginItem() {
         do {
             if LaunchAgent.installedRole != nil {
@@ -838,20 +976,33 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func stopSession() {
+        // Stop by process id, from the state file, rather than only the child this menu bar
+        // happens to be holding a handle to. After the menu bar is relaunched — or after a
+        // session is taken over — that handle is nil while the session is very much still
+        // running, and Stop silently did nothing.
+        var pids: [Int32] = []
+        if let session, session.isRunning { pids.append(session.processIdentifier) }
+        for role in [RuntimeState.Role.sharing, .listening] {
+            if let state = RuntimeState.load(role), state.isLive, !pids.contains(state.pid) {
+                pids.append(state.pid)
+            }
+        }
+
         // SIGINT rather than terminate(): the session handles it, which means it gives this
         // Mac its pointer back and un-hides the cursor on the way out.
-        if let session, session.isRunning {
-            kill(session.processIdentifier, SIGINT)
-            let deadline = Date().addingTimeInterval(2)
-            while session.isRunning && Date() < deadline {
-                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
-            }
-            if session.isRunning { session.terminate() }
+        for pid in pids { kill(pid, SIGINT) }
+
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            let stillUp = pids.filter { kill($0, 0) == 0 }
+            if stillUp.isEmpty { break }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
         }
+        for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
         session = nil
 
-        // A session started by the login item is not our child, so ask launchd instead.
-        if currentState != nil { try? LaunchAgent.stop() }
+        // A session started by the login item is not our child, so ask launchd too.
+        try? LaunchAgent.stop()
         refresh()
     }
 

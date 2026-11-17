@@ -10,15 +10,19 @@ public final class LinkListener {
         public var handshakeTimeout: TimeInterval
         /// Bind to loopback only. Used by `selftest` so the check never touches the network.
         public var loopbackOnly: Bool
+        /// Which physical link to accept connections on.
+        public var link: LinkPreference
 
         public init(port: UInt16, requireLocalNetwork: Bool = true,
                     bonjourName: String? = nil, handshakeTimeout: TimeInterval = 10,
-                    loopbackOnly: Bool = false) {
+                    loopbackOnly: Bool = false,
+                    link: LinkPreference = .auto) {
             self.port = port
             self.requireLocalNetwork = requireLocalNetwork
             self.bonjourName = bonjourName
             self.handshakeTimeout = handshakeTimeout
             self.loopbackOnly = loopbackOnly
+            self.link = link
         }
     }
 
@@ -59,7 +63,7 @@ public final class LinkListener {
     }
 
     public func start() throws {
-        let params = TLSConfig.parameters(keys: keys)
+        let params = TLSConfig.parameters(keys: keys, link: options.link)
         params.allowLocalEndpointReuse = true
         params.includePeerToPeer = !options.loopbackOnly
         if options.loopbackOnly {

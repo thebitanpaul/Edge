@@ -27,6 +27,7 @@ let usage = """
   selftest                Run the full crypto + transport check over loopback
   permissions             Show privacy permissions, and how to grant them
 
+  pair nearby             Pair with another Mac over the network, no code to type
   pair init               Generate a pairing code on this Mac
   pair join <CODE>        Accept a pairing code from the other Mac
   pair list               Show stored pairings
@@ -67,6 +68,7 @@ let usage = """
   --allow-public          Accept links from outside the private address ranges
   --rebind                Let a pinned pairing bind to a different Mac
   --timeout <SECONDS>     How long `discover` browses for
+  --replace               Take over a session already running on this Mac
   --log <LEVEL>           trace | debug | info | warn | error
   -h, --help              This help
   -v, --version           Version
@@ -115,6 +117,11 @@ func runConfig(_ args: Args) throws {
                 throw ContinuousError.invalidArgument("edgePressure must be a number between 1 and 200 (points of push)")
             }
             config.edgePressure = n
+        case "preferredLink":
+            guard let choice = LinkPreference(rawValue: value.lowercased()) else {
+                throw ContinuousError.invalidArgument("preferredLink must be auto, cable or wifi")
+            }
+            config.preferredLink = choice.rawValue
         case "clipboardSharing":
             config.clipboardSharing = ["true", "yes", "1", "on"].contains(value.lowercased())
         case "clipboardImages":
@@ -133,7 +140,7 @@ func runConfig(_ args: Args) throws {
             config.logLevel = value.lowercased()
         default:
             throw ContinuousError.invalidArgument(
-                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment, edgePressure, clipboardSharing or logLevel")
+                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment, edgePressure, clipboardSharing, preferredLink or logLevel")
         }
         try config.save()
         ok("\(key) = \(value)")

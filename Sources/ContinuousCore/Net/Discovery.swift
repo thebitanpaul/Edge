@@ -56,16 +56,18 @@ public enum PeerSelection {
 public final class Discovery {
     private var browser: NWBrowser?
     private let queue = DispatchQueue(label: "app.continuous.discovery")
+    private let serviceType: String
 
     public var onChange: (([DiscoveredPeer]) -> Void)?
 
-    public init() {}
+    public init(serviceType: String = LinkListener.bonjourServiceType) {
+        self.serviceType = serviceType
+    }
 
     public func start() {
         let params = NWParameters()
         params.includePeerToPeer = true
-        let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(
-            type: LinkListener.bonjourServiceType, domain: nil)
+        let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: serviceType, domain: nil)
         let browser = NWBrowser(for: descriptor, using: params)
 
         browser.browseResultsChangedHandler = { [weak self] results, _ in
@@ -81,11 +83,18 @@ public final class Discovery {
                 return DiscoveredPeer(serviceName: name, deviceID: deviceID,
                                       role: role, endpoint: result.endpoint)
             }
+            Log.debug("browse(\(self.serviceType)): \(peers.count) result(s) — "
+                      + peers.map { "\($0.serviceName)[\($0.deviceID?.short ?? "no id")]" }
+                             .joined(separator: ", "))
             self.onChange?(peers.sorted { $0.serviceName < $1.serviceName })
         }
 
         browser.stateUpdateHandler = { state in
-            if case .failed(let error) = state { Log.warn("discovery failed: \(error)") }
+            switch state {
+            case .failed(let error): Log.warn("discovery failed: \(error)")
+            case .ready: Log.debug("browsing for \(self.serviceType)")
+            default: break
+            }
         }
 
         self.browser = browser

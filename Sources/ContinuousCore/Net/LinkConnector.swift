@@ -8,9 +8,10 @@ public enum LinkConnector {
                                identity: Identity,
                                localRole: Role,
                                capabilities: Capabilities = .baseline,
+                               link: LinkPreference = .auto,
                                handshakeTimeout: TimeInterval = 10,
                                queue: DispatchQueue = DispatchQueue(label: "app.continuous.connector")) -> SecureLink {
-        let params = TLSConfig.parameters(keys: [PSKEntry(psk: psk)])
+        let params = TLSConfig.parameters(keys: [PSKEntry(psk: psk)], link: link)
         params.includePeerToPeer = true
         let connection = NWConnection(to: endpoint, using: params)
         return SecureLink(connection: connection,
