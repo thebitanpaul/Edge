@@ -105,7 +105,15 @@ struct Args {
 // MARK: - Shared helpers
 
 enum Runtime {
-    static let version = "0.1.0 (milestone 1 — secure link)"
+    static let version: String = {
+        let base = "0.2.0"
+        guard let info = Bundle.main.infoDictionary,
+              let commit = info["ContinuousCommit"] as? String else {
+            return base + " (unstamped build — run Scripts/build.sh)"
+        }
+        let built = (info["ContinuousBuiltAt"] as? String).map { ", built \($0)" } ?? ""
+        return "\(base) (commit \(commit)\(built))"
+    }()
 
     /// Blocks the calling thread until `signalled` is set or the deadline passes.
     /// Used instead of RunLoop so Ctrl-C handling stays simple and predictable.

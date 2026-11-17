@@ -39,6 +39,12 @@ BIN="$(swift build -c "$CONFIG" --show-bin-path)/continuous"
 test -x "$BIN" || { echo "build produced no binary at $BIN" >&2; exit 1; }
 
 VERSION="$("$BIN" --version | awk '{print $2}')"
+# Stamped into the bundle so `continuous --version` can say exactly which commit is running.
+# Three fixes for the same bug have now been reported against builds whose provenance was
+# unclear; this removes that question.
+COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if ! git -C "$ROOT" diff --quiet 2>/dev/null; then COMMIT="$COMMIT+local"; fi
+BUILT_AT="$(date -u '+%Y-%m-%d %H:%M UTC')"
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
@@ -64,6 +70,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>            <string>APPL</string>
     <key>CFBundleShortVersionString</key>     <string>$VERSION</string>
     <key>CFBundleVersion</key>                <string>$VERSION</string>
+    <key>ContinuousCommit</key>               <string>$COMMIT</string>
+    <key>ContinuousBuiltAt</key>              <string>$BUILT_AT</string>
     <key>LSMinimumSystemVersion</key>         <string>13.0</string>
     <!-- No Dock icon, no menu bar: this is a background tool driven from the CLI. -->
     <key>LSUIElement</key>                    <true/>
@@ -147,7 +155,7 @@ exec "$APP/Contents/MacOS/continuous" "\$@"
 LAUNCHER
 chmod +x "$ROOT/build/continuous"
 
-echo "==> Built $APP"
+echo "==> Built $APP  (commit $COMMIT)"
 echo "    binary  $(du -h "$APP/Contents/MacOS/continuous" | cut -f1)"
 echo "    launcher $ROOT/build/continuous"
 

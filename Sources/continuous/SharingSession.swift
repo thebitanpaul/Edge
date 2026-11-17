@@ -50,6 +50,12 @@ final class SharingSession {
     private var holdTimer: DispatchSourceTimer?
     /// Largest distance the cursor strayed from its parking spot during this trip.
     private var maxDrift: Double = 0
+    private var driftSamples = 0
+    /// Samples the cursor far faster than the run loop ticks.
+    ///
+    /// At 10 Hz a sampler cannot distinguish a cursor that never moved from one that a timer
+    /// keeps putting back, which is how the previous diagnosis went wrong. 1 ms can.
+    private var driftTimer: DispatchSourceTimer?
     private let holdQueue = DispatchQueue(label: "app.continuous.cursor-hold")
 
     var onModeChange: ((Mode) -> Void)?
@@ -247,6 +253,7 @@ final class SharingSession {
         cursorHidden = LocalPointer.hide()
         lock.lock(); parkedAt = departure; driftCorrections = 0; maxDrift = 0; lock.unlock()
         startHolding(at: departure)
+        startWatchingDrift(from: departure)
         Log.debug("pointer left this Mac at \(departure) → arrived at \(entry) on the other")
         if !cursorHidden {
             Log.debug("could not hide the local cursor; it will sit parked at the edge instead")
@@ -261,6 +268,29 @@ final class SharingSession {
     /// completely. This exists for the case where some Mac, some day, turns out to need it —
     /// `continuous config set holdLocalPointer true`. It runs on its own queue rather than in
     /// the tap callback, because that is where the harm was.
+    /// Watches where this Mac's cursor really is, without touching it.
+    private func startWatchingDrift(from point: ScreenPoint) {
+        driftTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: holdQueue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(1), leeway: .microseconds(200))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let live = LocalPointer.liveLocation
+            let drift = abs(live.x - point.x) + abs(live.y - point.y)
+            self.lock.lock()
+            self.driftSamples += 1
+            if drift > self.maxDrift { self.maxDrift = drift }
+            self.lock.unlock()
+        }
+        driftTimer = timer
+        timer.resume()
+    }
+
+    private func stopWatchingDrift() {
+        driftTimer?.cancel()
+        driftTimer = nil
+    }
+
     private func startHolding(at point: ScreenPoint) {
         guard config.holdLocalPointer else { return }
         holdTimer?.cancel()
@@ -290,6 +320,7 @@ final class SharingSession {
     private func finishReturn(to destination: ScreenPoint?, link: SecureLink?, reason: String) {
         // First thing, before anything can warp the cursor back to the parking spot again.
         stopHolding()
+        stopWatchingDrift()
         link?.send(.leaveScreen)
 
         if pointerDetached { LocalPointer.reattachToHardware(); pointerDetached = false }
@@ -302,15 +333,28 @@ final class SharingSession {
         driftCorrections = 0
         lock.unlock()
         _ = corrections
+        lock.lock()
         let strayed = maxDrift
-        lock.lock(); maxDrift = 0; lock.unlock()
-        let summary = String(format: "%d movements forwarded, cursor strayed at most %.0fpx "
-                             + "(tap: %@, detach %@, hide %@)",
-                             moves, strayed,
+        let samples = driftSamples
+        maxDrift = 0
+        driftSamples = 0
+        lock.unlock()
+
+        let summary = String(format: "cursor strayed at most %.0fpx over %d samples "
+                             + "(%d movements forwarded; tap %@, detach %@, hide %@, hold timer %@)",
+                             strayed, samples, moves,
                              tap?.location == .cghidEventTap ? "HID" : "session",
                              pointerDetached ? "ok" : "failed",
-                             cursorHidden ? "ok" : "failed")
-        if strayed > 4 { Log.warn(summary) } else { Log.debug(summary) }
+                             cursorHidden ? "ok" : "failed",
+                             config.holdLocalPointer ? "on" : "off")
+        // Surfaced rather than buried: this is the number that says whether the second
+        // cursor is still happening, and it comes from the real session rather than a
+        // reconstruction of it.
+        if strayed > 8 {
+            warn("this Mac's cursor moved while the pointer was away — " + summary)
+        } else {
+            Log.debug(summary)
+        }
 
         Log.debug("pointer back on this Mac (\(reason))")
         onModeChange?(.local)

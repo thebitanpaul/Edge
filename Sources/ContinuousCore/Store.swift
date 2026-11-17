@@ -239,9 +239,11 @@ public struct Config: Codable, Sendable {
     public var edgePressure: Double = 24
     /// Re-park this Mac's cursor on a timer while the pointer is on the other Mac.
     ///
-    /// Off by default: deleting the movement in the event tap already holds the cursor
-    /// completely still, and doing extra work for it turned out to be counterproductive.
-    public var holdLocalPointer: Bool = false
+    /// On by default. Deleting the movement in the event tap is supposed to be enough, and
+    /// measuring whether it is has been unreliable — a 10 ms sampler cannot tell "the cursor
+    /// never moved" from "a timer kept putting it back". So the timer stays, and it runs on
+    /// its own queue: the harm was only ever in doing this from inside the tap callback.
+    public var holdLocalPointer: Bool = true
     public var logLevel: String = "info"
 
     public init() {}
@@ -269,7 +271,7 @@ public struct Config: Codable, Sendable {
         remoteEdge = try c.decodeIfPresent(String.self, forKey: .remoteEdge) ?? "right"
         remoteAlignment = try c.decodeIfPresent(String.self, forKey: .remoteAlignment) ?? "proportional"
         edgePressure = max(1, try c.decodeIfPresent(Double.self, forKey: .edgePressure) ?? 24)
-        holdLocalPointer = try c.decodeIfPresent(Bool.self, forKey: .holdLocalPointer) ?? false
+        holdLocalPointer = try c.decodeIfPresent(Bool.self, forKey: .holdLocalPointer) ?? true
         logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? "info"
     }
 

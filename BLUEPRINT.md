@@ -210,26 +210,25 @@ success, `CGDisplayHideCursor` returns success, and the cursor moved anyway, so 
 was corrected after every movement instead. This made it worse, for a reason that took a
 fourth attempt to see.
 
-**Attempt 4 — measure first.** `cursor-doctor` reproduces the live conditions on one Mac and
-reports numbers. It said: tap at the HID level, 447 movements deleted, cursor held at **one
-distinct position, 0 px of drift**. Deleting the event holds the cursor completely — all three
-earlier theories were solving a problem that does not exist at that layer.
+**Attempt 4 — measure, badly.** `cursor-doctor` reported 447 movements deleted and the cursor
+held at one position with no drift, and the conclusion drawn was that deleting the event is
+sufficient on its own. It was not a sound conclusion: that run also had an 8 ms re-parking
+timer going, and sampled the cursor every 10 ms. A sampler slower than the thing it measures
+can only report success. The timer was doing the work and the sampler could not see it.
 
-What *did* exist was the correction itself. The tap callback runs inside the window server's
-own event pipeline, and the correction called synchronously back into it — a warp plus a
-re-detach, about 48 µs of IPC — while holding one of its events. That is enough for events to
-slip through undeleted, which is precisely the second cursor. The fix that was supposed to
-hold the cursor still was the thing letting it move.
+**Attempt 5 — fix the measurement first.** Sampling now runs at 1 ms on its own queue, and
+`cursor-doctor` runs three trials that differ only in how the cursor is held: deleted events
+alone, deleted plus a background re-parking timer, and deleted plus a warp issued from inside
+the tap callback. Three numbers, one run, no argument about which mechanism is responsible.
 
-So the callback now deletes the event and does nothing else. The timer-based re-parking
-survives as `holdLocalPointer`, off by default, and `checkLiveness` measures drift rather than
-correcting it — correcting from there was what hid the problem in the first place.
+The one conclusion that does survive is about *where* the work may be done. The tap callback
+runs inside the window server's event pipeline; calling synchronously back into it while
+holding one of its events lets events slip through undeleted. So the callback deletes the event
+and returns, and any re-parking happens on its own queue, where it cannot interfere.
 
-The lesson, recorded because it was expensive: three fixes were reasoned from documentation and
-all three were wrong, in a way no amount of further reading would have caught. The thing that
-settled it was a diagnostic that ran the real conditions and printed numbers. `cursor-doctor`
-now runs two trials that differ only in whether the callback calls back into the window server,
-so the comparison is visible rather than argued.
+The lesson, recorded because it was expensive: four fixes, three reasoned from documentation
+and one from a diagnostic that was quietly measuring the wrong thing. Instruments need
+validating before conclusions are drawn from them — a check that cannot fail is not a check.
 
 **Also fixed:** a drag towards the far edge used to hand the pointer over mid-drag, stranding
 whatever you were moving. Crossing is now blocked while any mouse button is held.

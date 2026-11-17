@@ -206,8 +206,12 @@ continuous cursor-doctor      # can this Mac's cursor be held still?
 ```
 
 If you ever see a second pointer mirroring your hand on the Mac you are *not* using, run
-`cursor-doctor`. It reproduces the live conditions on one machine, moves nothing but your own
-mouse, and reports measurements rather than a verdict pulled from the documentation.
+`cursor-doctor`. It runs three trials on one machine — deleting the movement, deleting plus
+re-parking on a timer, and deleting plus warping from inside the tap callback — samples the
+cursor every millisecond, and prints the three numbers side by side.
+
+`continuous --version` reports the exact commit the bundle was built from, so there is never
+any doubt about which code produced a result.
 
 ### Granting them once instead of after every rebuild
 

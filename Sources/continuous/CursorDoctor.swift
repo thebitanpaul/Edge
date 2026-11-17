@@ -61,22 +61,34 @@ extension Commands {
         ok("both readings follow the mouse when nothing is in the way")
         out()
 
-        // ---- Phases 2 and 3: the same conditions, two shapes of callback. ----
+        // ---- Trials. Same conditions, three shapes of cursor-holding. ----
         //
-        // The only difference between them is whether the tap callback calls back into the
-        // window server while it is holding one of the window server's events. That is the
-        // thing under suspicion, so it is the only variable.
+        // Sampled every millisecond, on its own queue. The previous version of this check
+        // sampled every ten and concluded the cursor never moved, when in truth a timer was
+        // putting it back between samples. A sampler slower than the thing it is measuring
+        // can only ever report success.
         struct Trial {
             let title: String
+            let note: String
             let warpInCallback: Bool
+            let holdTimer: Bool
         }
-        var results: [(Trial, swallowed: Int, drift: Double, positions: Int)] = []
+        let trials = [
+            Trial(title: "2. Delete the movement, nothing else",
+                  note: "what the event tap is supposed to achieve on its own",
+                  warpInCallback: false, holdTimer: false),
+            Trial(title: "3. Delete it, and re-park on a background timer",
+                  note: "what this build does",
+                  warpInCallback: false, holdTimer: true),
+            Trial(title: "4. Delete it, and warp from inside the tap callback",
+                  note: "what the previous build did",
+                  warpInCallback: true, holdTimer: false),
+        ]
+        var results: [(trial: Trial, swallowed: Int, drift: Double, samples: Int)] = []
 
-        for trial in [Trial(title: "2. Deleting the movement, and nothing else",
-                            warpInCallback: false),
-                      Trial(title: "3. Deleting it, and warping the cursor from inside the callback",
-                            warpInCallback: true)] {
+        for trial in trials {
             out(Style.bold(trial.title))
+            out(Style.dim("    \(trial.note)"))
 
             let park = Box(LocalPointer.liveLocation)
             let swallowed = Box<Int>(0)
@@ -93,33 +105,54 @@ extension Commands {
             do { try tap.start() } catch {
                 bad(error.localizedDescription); explainCapturePermissions(); throw ExitSilently(code: 1)
             }
-            out("    tap level: \(tap.location == .cghidEventTap ? "HID" : "session")")
 
             LocalPointer.allowEventsDuringWarps()
             park.value = LocalPointer.liveLocation
             LocalPointer.warp(to: park.value)
             let detached = LocalPointer.detachFromHardware()
             let hidden = LocalPointer.hide()
-            out("    detach \(detached ? "ok" : "FAILED") · hide \(hidden ? "ok" : "FAILED") · parked at \(park.value)")
+            out("    tap \(tap.location == .cghidEventTap ? "HID" : "session") · detach \(detached ? "ok" : "FAILED") · hide \(hidden ? "ok" : "FAILED") · parked at \(park.value)")
 
-            warn("move the mouse in big circles for 5 seconds — watch the screen")
-            var seen = Set<String>()
-            var maxDrift = 0.0
-            let deadline = Date().addingTimeInterval(5)
-            while Date() < deadline {
-                let live = LocalPointer.liveLocation
-                seen.insert("\(live)")
-                maxDrift = max(maxDrift, abs(live.x - park.value.x) + abs(live.y - park.value.y))
-                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            let queue = DispatchQueue(label: "app.continuous.doctor")
+            let parked = park.value
+
+            var holdTimer: DispatchSourceTimer?
+            if trial.holdTimer {
+                let t = DispatchSource.makeTimerSource(queue: queue)
+                t.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .milliseconds(2))
+                t.setEventHandler { LocalPointer.hold(at: parked) }
+                holdTimer = t
+                t.resume()
             }
 
+            let drift = Box<Double>(0)
+            let samples = Box<Int>(0)
+            let sampler = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "app.continuous.doctor.sample"))
+            sampler.schedule(deadline: .now(), repeating: .milliseconds(1), leeway: .microseconds(200))
+            sampler.setEventHandler {
+                let live = LocalPointer.liveLocation
+                let d = abs(live.x - parked.x) + abs(live.y - parked.y)
+                samples.mutate { $0 += 1 }
+                drift.mutate { if d > $0 { $0 = d } }
+            }
+            sampler.resume()
+
+            warn("move the mouse in big circles for 5 seconds — watch the screen")
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            }
+
+            sampler.cancel()
+            holdTimer?.cancel()
             LocalPointer.reattachToHardware()
             if hidden { LocalPointer.show() }
             tap.stop()
+            LocalPointer.warp(to: parked)
 
-            out(String(format: "    %d movements deleted · cursor strayed at most %.0fpx · %d distinct positions",
-                       swallowed.value, maxDrift, seen.count))
-            results.append((trial, swallowed.value, maxDrift, seen.count))
+            out(String(format: "    %d movements deleted · strayed at most %.0fpx · %d samples",
+                       swallowed.value, drift.value, samples.value))
+            results.append((trial, swallowed.value, drift.value, samples.value))
             out()
 
             if swallowed.value == 0 {
@@ -130,30 +163,34 @@ extension Commands {
 
         // ---- Verdict ----
         out(Style.bold("Verdict"))
-        let plain = results[0]
-        let warping = results[1]
+        let deleteOnly = results[0]
+        let withTimer = results[1]
+        let withWarp = results[2]
+        let quiet = 8.0
 
-        if plain.drift < 6 && warping.drift >= 6 {
-            ok("deleting the movement holds the cursor; warping from inside the callback breaks it")
-            out()
-            out("    Cursor strayed \(Int(plain.drift))px when the callback only deleted the event,")
-            out("    and \(Int(warping.drift))px when it also warped the cursor. Calling back into the")
-            out("    window server while holding one of its events lets events through.")
-            out()
-            info("this build already does the first of those. You should see one pointer.")
-        } else if plain.drift < 6 && warping.drift < 6 {
-            ok("the cursor was held still both ways (\(Int(plain.drift))px and \(Int(warping.drift))px)")
-            out()
-            out("    So the host side holds its cursor under both shapes of callback, and the")
-            out("    pointer you are seeing is not this Mac's own cursor being moved by your")
-            out("    mouse. Worth checking next: whether the other Mac's cursor is showing on")
-            out("    the shared monitor because the monitor is switched to it.")
+        out(String(format: "    delete only          %5.0f px", deleteOnly.drift))
+        out(String(format: "    delete + timer       %5.0f px   ← this build", withTimer.drift))
+        out(String(format: "    delete + warp inside %5.0f px   ← previous build", withWarp.drift))
+        out()
+
+        if withTimer.drift < quiet {
+            ok("this build holds the cursor still")
+            if deleteOnly.drift >= quiet {
+                info("deleting the event alone is not enough on this Mac — the timer is doing")
+                info("the work, which is why it is on by default.")
+            } else {
+                info("deleting the event is enough on its own here; the timer is spare capacity.")
+            }
+            if withWarp.drift >= quiet {
+                info("and warping from inside the callback does break it, as suspected.")
+            }
         } else {
-            bad("the cursor strayed even with a callback that does nothing but delete the event")
+            bad("the cursor strayed \(Int(withTimer.drift))px even as this build holds it")
             out()
-            out("    \(Int(plain.drift))px over \(plain.positions) positions, \(plain.swallowed) movements deleted,")
-            out("    at the \(results[0].0.warpInCallback ? "?" : "HID") level. That contradicts the measurement this")
-            out("    build is based on, so please send this output — it changes the diagnosis.")
+            out("    Every mechanism available has now been measured and none of them hold")
+            out("    the cursor on this Mac. That rules out the approach, not the details.")
+            out("    Please send this whole output — the next step is to stop trying to hold")
+            out("    the cursor and take the input device away from the window server instead.")
             throw ExitSilently(code: 1)
         }
     }
