@@ -2,6 +2,8 @@
 #
 # Publishes dist/ to the GitHub release for the version in build/Edge.app, and marks it Latest.
 #
+# Normally you don't run this yourself: Scripts/release.sh does the whole release and calls it.
+# By hand:
 #   Scripts/package-dmg.sh                         # build dist/ first
 #   Scripts/publish-release.sh [--notes FILE]      # then publish it
 #
@@ -16,8 +18,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-REPO="thebitanpaul/Edge"
-API="https://api.github.com/repos/$REPO"
+. "$ROOT/Scripts/lib/release-common.sh"
 
 NOTES=""
 while [ $# -gt 0 ]; do
@@ -35,9 +36,11 @@ for f in "${ASSETS[@]}"; do
   [ -f "$ROOT/dist/$f" ] || { echo "dist/$f is missing — run Scripts/package-dmg.sh first." >&2; exit 1; }
 done
 
-# Refuse to publish something the users' Macs would not recognise as the same app.
-if ! codesign -dvv "$APP" 2>&1 | grep -F "Authority=Edge Local Signing" >/dev/null; then
-  echo "build/Edge.app is not signed with \"Edge Local Signing\" (the build fell back to ad-hoc)." >&2
+# Refuse to publish something the users' Macs would not recognise as the same app. By
+# fingerprint, not by name: any Mac can make a certificate called "Edge Local Signing".
+if ! signed_by_pinned_cert "$APP"; then
+  echo "build/Edge.app is not signed with the release \"$SIGNING_NAME\" certificate" >&2
+  echo "(ad-hoc fallback, or a different certificate with the same name)." >&2
   echo "Publishing it would make every user grant permissions again. Fix signing and rebuild." >&2
   exit 1
 fi
@@ -49,10 +52,7 @@ if [ -z "$(git ls-remote origin "refs/tags/$TAG")" ]; then
   exit 1
 fi
 
-TOKEN="${GITHUB_TOKEN:-}"
-if [ -z "$TOKEN" ]; then
-  TOKEN="$(printf 'protocol=https\nhost=github.com\n\n' | git credential fill 2>/dev/null | sed -n 's/^password=//p')"
-fi
+TOKEN="$(github_token)"
 [ -n "$TOKEN" ] || { echo "No GitHub token: set GITHUB_TOKEN or sign git in to GitHub." >&2; exit 1; }
 
 TMP="$(mktemp -d -t edge-release)"

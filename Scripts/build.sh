@@ -34,7 +34,9 @@ BUNDLE_ID="app.edge.cli"
 APP="$ROOT/build/Edge.app"
 ICON="$ROOT/Resources/Edge.icns"
 # A self-signed identity created by Scripts/create-signing-identity.sh, if the user made one.
-SIGNING_IDENTITY="Edge Local Signing"
+# Scripts/release.sh passes the release certificate's SHA-1 instead, so a look-alike with the
+# same name can never be the one picked.
+SIGNING_IDENTITY="${EDGE_SIGNING_IDENTITY:-Edge Local Signing}"
 
 # Anything in build/ left over from a previous name. A stale Continuous.app is not inert:
 # it holds its own privacy grants, it is what a login item installed before the rename still
