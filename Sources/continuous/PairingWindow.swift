@@ -82,8 +82,9 @@ final class PairingWindowController: NSWindowController {
         spinner.controlSize = .small
         content.addSubview(spinner)
 
-        for (button, x) in [(primaryButton, 258), (secondaryButton, 148)] {
-            button.frame = NSRect(x: CGFloat(x), y: 20, width: 138, height: 30)
+        // 20 points of gap, not an overlap of 28: the old pair ran 148–286 and 258–396.
+        for (button, x) in [(primaryButton, 272), (secondaryButton, 132)] {
+            button.frame = NSRect(x: CGFloat(x), y: 20, width: 124, height: 30)
             button.bezelStyle = .rounded
             button.target = self
             content.addSubview(button)
@@ -137,9 +138,12 @@ final class PairingWindowController: NSWindowController {
     private func render() {
         digits.isHidden = true
         detail.isHidden = false
+        // Hidden, not merely stopped: a visible wheel that is not turning looks like a hang.
+        spinner.isHidden = true
 
         switch stage {
         case .searching:
+            spinner.isHidden = false
             spinner.startAnimation(nil)
             title.stringValue = "Looking for the other Mac"
             detail.stringValue = "Choose Connect to a nearby Mac over there too. Both Macs "
@@ -162,6 +166,7 @@ final class PairingWindowController: NSWindowController {
             secondaryButton.isHidden = false
 
         case let .waitingForPeer(peer):
+            spinner.isHidden = false
             spinner.startAnimation(nil)
             title.stringValue = "Waiting for \(peer)"
             detail.stringValue = "Confirm the same number over there."

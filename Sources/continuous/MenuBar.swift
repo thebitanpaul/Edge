@@ -43,6 +43,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var blinkTimer: Timer?
     private var arrangementWindow: ArrangementWindowController?
     private var pairingWindow: PairingWindowController?
+    /// Double optional on purpose: "not yet looked" is different from "looked, nothing
+    /// wrong", and only the transition into a problem is worth announcing.
+    private var lastAnnouncedLinkProblem: String??
     private var blinkOn = true
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
@@ -60,6 +63,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // opened and closed, and it follows you around until you hover the icon again. The
         // first line of the menu says the same thing, in a place that behaves.
         lastIconSignature = iconSignature
+        // Seed it, so an existing problem at launch is reported once the session is actually
+        // running rather than the instant the menu appears.
+        lastAnnouncedLinkProblem = .some(linkProblem)
         redrawIcon()
 
         // Faster than a human notices a state change, slower than anything that matters.
@@ -98,6 +104,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func refresh() {
         lastKnownState = currentState
         updateBlinking()
+        announceLinkProblemIfNeeded()
 
         // Only redraw when it would differ. Touching an NSStatusItem button makes AppKit
         // reconsider the cursor, and doing that twice a second un-hid the cursor the session
@@ -175,7 +182,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let state = lastKnownState
         let store = (try? SecretStore.load()) ?? SecretStore()
 
-        if store.pairings.filter(\.isBound).isEmpty && store.pairings.isEmpty {
+        if store.pairings.isEmpty {
             menu.addItem(disabled("Not set up"))
             menu.addItem(action("Set up…", #selector(runSetup)))
             menu.addItem(.separator())
@@ -183,46 +190,43 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
 
-        // Status, in as few lines as will carry it.
+        // Status: role first, because everything else in this menu depends on it.
         if !isRunning {
             menu.addItem(disabled("Stopped · \(mode.shortTitle)"))
         } else if let state, state.connected {
             let peer = state.peerName ?? "the other Mac"
             menu.addItem(disabled(mode == .host && state.pointerIsRemote == true
                                   ? "Pointer on \(peer)"
-                                  : "Connected · \(peer)"))
+                                  : "\(mode.shortTitle) · connected to \(peer)"))
             if let rtt = state.rttMillis {
                 menu.addItem(disabled(String(format: "%.0f ms%@", rtt,
                                              state.clipboardActive ? " · clipboard" : "")))
             }
         } else {
-            menu.addItem(disabled("Connecting…"))
+            menu.addItem(disabled("\(mode.shortTitle) · connecting…"))
             menu.addItem(disabled(waitingHint))
+        }
+
+        // A link that cannot exist is worth saying out loud rather than retrying in silence.
+        if let problem = linkProblem {
+            menu.addItem(.separator())
+            menu.addItem(disabled(problem))
+            menu.addItem(action("Use Wi-Fi instead", #selector(switchToWiFi)))
         }
 
         menu.addItem(.separator())
         menu.addItem(action(isRunning ? "Stop" : "Start", #selector(toggleRunning)))
 
-        let modeItem = NSMenuItem(title: "This Mac: \(mode.shortTitle)", action: nil,
-                                  keyEquivalent: "")
-        let modeMenu = NSMenu()
-        for candidate in [Mode.host, .client] {
-            let entry = NSMenuItem(title: candidate.title, action: #selector(selectMode(_:)),
-                                   keyEquivalent: "")
-            entry.target = self
-            entry.state = candidate == mode ? .on : .off
-            entry.representedObject = candidate.rawValue
-            modeMenu.addItem(entry)
-        }
-        modeItem.submenu = modeMenu
-        menu.addItem(modeItem)
-
         menu.addItem(.separator())
         menu.addItem(devicesMenuItem())
-        menu.addItem(arrangementMenuItem())
-        // Only where it does something. A secondary Mac listens on everything it has, so the
-        // choice has no effect there and offering it only invites someone to set it wrongly.
-        if mode == .host { menu.addItem(linkMenuItem()) }
+
+        // Only the primary has any use for these. The arrangement decides where *its* pointer
+        // goes, and the link preference governs dialling out, which only it does. Showing
+        // them on the secondary invited changes that silently did nothing.
+        if mode == .host {
+            menu.addItem(arrangementMenuItem())
+            menu.addItem(linkMenuItem())
+        }
 
         let config = (try? Config.load()) ?? Config()
         menu.addItem(.separator())
@@ -239,18 +243,55 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(action("Quit", #selector(quit)))
     }
 
-    /// Everything worth having and not worth reading every time the menu opens.
     private func helpMenuItem() -> NSMenuItem {
         let item = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
+        // The single way to change roles. A "this Mac is…" switch looked like it worked and
+        // did not: it changed one Mac while the other kept its old role, and left behind an
+        // arrangement describing a relationship that no longer existed.
         submenu.addItem(action("Set up again…", #selector(runSetup)))
         submenu.addItem(.separator())
-        submenu.addItem(action("Why is it not connecting?…", #selector(troubleshoot)))
         submenu.addItem(action("Open log…", #selector(openLog)))
-        submenu.addItem(.separator())
-        submenu.addItem(disabled(Runtime.version))
+        submenu.addItem(disabled(Runtime.shortVersion))
         item.submenu = submenu
         return item
+    }
+
+    /// A link preference that cannot currently be satisfied, or nil.
+    ///
+    /// Unplug the cable with the preference set to cable and the session retries for ever
+    /// against something that is not there. Nothing in the interface said so, which leaves
+    /// someone watching a Mac that will not connect with no idea why.
+    private var linkProblem: String? {
+        guard mode == .host else { return nil }
+        let config = (try? Config.load()) ?? Config()
+        let addresses = NetworkAddress.localAddresses()
+        switch config.link {
+        case .cable:
+            return addresses.contains(where: NetworkAddress.isLinkLocalIPv4)
+                ? nil : "Set to cable, but no cable is connected"
+        case .wifi:
+            return addresses.contains(where: { !NetworkAddress.isLinkLocalIPv4($0) })
+                ? nil : "Set to Wi-Fi, but this Mac is not on a network"
+        case .auto:
+            return addresses.isEmpty ? "This Mac is not on any network" : nil
+        }
+    }
+
+    /// Says it once, when it starts being true, rather than every half second.
+    private func announceLinkProblemIfNeeded() {
+        let problem = linkProblem
+        guard problem != lastAnnouncedLinkProblem else { return }
+        lastAnnouncedLinkProblem = problem
+        guard let problem, isRunning else { return }
+
+        stopSession()
+        notify(problem, "Stopped. Choose a link that exists, or reconnect the cable.")
+        refresh()
+    }
+
+    @objc private func switchToWiFi() {
+        applyConfig { $0.preferredLink = LinkPreference.auto.rawValue }
     }
 
     private func linkMenuItem() -> NSMenuItem {
@@ -292,29 +333,38 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func performSetup() {
         let alert = NSAlert()
+        NSApp.activate(ignoringOtherApps: true)
         alert.messageText = "Which Mac is this?"
         alert.informativeText =
             "Set the other Mac to the opposite.\n\n"
-            + "Both Macs need the same Wi-Fi network, or a USB-C cable between them."
+            + "Both Macs need the same Wi-Fi network to find each other."
         alert.addButton(withTitle: "Primary — I use this keyboard")
         alert.addButton(withTitle: "Secondary — controlled by the other")
         alert.addButton(withTitle: "Cancel")
 
         let answer = alert.runModal()
         guard answer != .alertThirdButtonReturn else { return }
-        setMode(answer == .alertFirstButtonReturn ? .host : .client, restart: false)
+        let chosen: Mode = answer == .alertFirstButtonReturn ? .host : .client
+        let changed = chosen != mode
+
+        // Stop first, always. Changing roles while a session runs leaves it dialling with the
+        // old one, which is why switching appeared to half-work: the connection came back
+        // wrong rather than not at all.
+        stopSession()
+        setMode(chosen, restart: false)
 
         let store = (try? SecretStore.load()) ?? SecretStore()
-        guard store.pairings.filter(\.isBound).isEmpty else {
-            notify("Set as \(mode.shortTitle)",
-                   "Already paired. Set the other Mac to \(mode.opposite.shortTitle), then "
-                   + "Start on both.")
-            refresh()
+        if store.pairings.isEmpty {
+            performPairNearby()
             return
         }
-        // Straight into pairing: choosing a role and then being asked whether you would also
-        // like to pair is a question with only one sensible answer.
-        pairNearby()
+
+        notify("This Mac is \(chosen.shortTitle)",
+               changed
+                 ? "Set the other Mac to \(chosen.opposite.shortTitle) as well — one of each. "
+                   + "Then press Start on both."
+                 : "Press Start on both Macs.")
+        refresh()
     }
 
     /// A short line naming the likeliest reason nothing has connected yet.
@@ -337,31 +387,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: "Devices", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         let store = (try? SecretStore.load()) ?? SecretStore()
-        let paired = store.pairings.filter(\.isBound)
-        let pending = store.pairings.filter { !$0.isBound }
-
-        if paired.isEmpty {
+        // Every pairing, connected or not. Hiding the unconnected ones was meant to stop a
+        // generated code looking like a paired Mac — but pairing over the network learns the
+        // other Mac's name as part of the exchange, so there is a real Mac to name from the
+        // moment it succeeds, and hiding it made a successful pairing look like a failed one.
+        if store.pairings.isEmpty {
             submenu.addItem(disabled("No Macs paired yet"))
         } else {
-            for pairing in paired {
+            for pairing in store.pairings {
                 let connected = lastKnownState?.connected == true
                     && lastKnownState?.peerName == pairing.peerName
-                let entry = NSMenuItem(title: pairing.peerName ?? pairing.label,
+                let name = pairing.peerName ?? pairing.label
+                let entry = NSMenuItem(title: connected || pairing.isBound ? name
+                                                                          : "\(name) — not connected yet",
                                        action: nil, keyEquivalent: "")
                 entry.state = connected ? .on : .off
                 entry.submenu = detailMenu(for: pairing)
                 submenu.addItem(entry)
             }
-        }
-
-        if let waiting = pending.first {
-            submenu.addItem(.separator())
-            submenu.addItem(disabled("Not connected yet"))
-            let cancel = NSMenuItem(title: "Cancel this pairing", action: #selector(forgetDevice(_:)),
-                                    keyEquivalent: "")
-            cancel.target = self
-            cancel.representedObject = waiting.label
-            submenu.addItem(cancel)
         }
 
         submenu.addItem(.separator())
@@ -702,19 +745,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         isRunning ? stopSession() : startSession()
     }
 
-    @objc private func selectMode(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let chosen = Mode(rawValue: raw) else { return }
-        setMode(chosen, restart: true)
-    }
-
     private func setMode(_ chosen: Mode, restart: Bool) {
         guard chosen != mode else { return }
-        let wasRunning = isRunning
         stopSession()
         mode = chosen
         UserDefaults.standard.set(chosen.rawValue, forKey: "mode")
-        if restart && wasRunning { startSession() }
+
+        // The arrangement described where the *other* Mac sat relative to this one. Swap the
+        // roles and that sentence is about a different pair of screens, so keeping the old
+        // answer is worse than having none: it looks configured and points the wrong way.
+        var config = (try? Config.load()) ?? Config()
+        config.remoteEdge = ScreenEdge.right.rawValue
+        try? config.save()
+
+        // Editability depends on the role, and the window caches it, so it has to go.
+        arrangementWindow?.close()
+        arrangementWindow = nil
+
+        if restart { startSession() }
         refresh()
     }
 
@@ -751,54 +799,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             notify("Could not change the login item", error.localizedDescription)
         }
         refresh()
-    }
-
-    @objc private func troubleshoot() {
-        // Deferred by one turn of the run loop so menu tracking ends first; a window opened
-        // while the menu is still tracking never becomes key, and its text fields silently
-        // ignore every keystroke.
-        DispatchQueue.main.async { [weak self] in self?.performTroubleshoot() }
-    }
-
-    private func performTroubleshoot() {
-        guard let executable = Bundle.main.executableURL else { return }
-        let task = Process()
-        task.executableURL = executable
-        task.arguments = ["troubleshoot"]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = pipe
-
-        var report: String
-        do {
-            try task.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            task.waitUntilExit()
-            report = String(data: data, encoding: .utf8) ?? ""
-            // The child writes for a terminal; strip the colour codes rather than show them.
-            report = report.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "",
-                                                 options: .regularExpression)
-        } catch {
-            report = "Could not run the check: \(error.localizedDescription)"
-        }
-
-        let alert = NSAlert()
-        alert.messageText = "Why it is not connecting"
-        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
-        text.string = report
-        text.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        text.isEditable = false
-        text.drawsBackground = false
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
-        scroll.documentView = text
-        scroll.hasVerticalScroller = true
-        alert.accessoryView = scroll
-        alert.addButton(withTitle: "Copy")
-        alert.addButton(withTitle: "Done")
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(report, forType: .string)
-        }
     }
 
     @objc private func openLog() {

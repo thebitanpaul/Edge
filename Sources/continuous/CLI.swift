@@ -105,8 +105,12 @@ struct Args {
 // MARK: - Shared helpers
 
 enum Runtime {
+    /// Just the number. The commit belongs in `--version`, where someone is asking, not in
+    /// a menu where it is noise.
+    static let shortVersion = "0.2.0"
+
     static let version: String = {
-        let base = "0.2.0"
+        let base = shortVersion
         guard let info = Bundle.main.infoDictionary,
               let commit = info["ContinuousCommit"] as? String else {
             return base + " (unstamped build — run Scripts/build.sh)"

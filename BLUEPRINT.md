@@ -573,6 +573,33 @@ costs nothing; the cable then carries the link, where its speed is the point and
 entirely dependable. The manual address survives only as a terminal flag, out of the menu,
 because in a user interface it is almost never the right answer.
 
+#### One Mac drives; the menu should say so
+
+A batch of reports that were really one problem: the secondary Mac offered the screen
+arrangement and the link preference, neither of which does anything there, and a "this Mac
+is…" switch that appeared to change roles but left the other Mac in its old one and kept an
+arrangement describing a relationship that no longer existed.
+
+The secondary now shows neither control. Roles change in exactly one place — *Set up again* —
+which stops the session first (changing roles under a running one is why switching came back
+wrong rather than not at all), resets the arrangement, discards the cached arrangement window
+so its editability follows the new role, and says plainly that the other Mac needs the opposite.
+
+**Also in this batch:**
+
+* Devices hid pairings that had not connected, which was right when a pairing was a generated
+  code and wrong now: pairing over the network learns the other Mac's name as part of the
+  exchange, so a successful pairing has a real Mac to name — and hiding it made success look
+  like failure.
+* A spinner that was stopped but still visible reads as a hang; it is hidden unless something
+  is actually being waited for.
+* The two buttons in the pairing window overlapped by 28 points.
+* A link preference that cannot be met — cable chosen with no cable attached, Wi-Fi chosen off
+  a network — now stops the session and says so, once, instead of retrying for ever against
+  something that is not there.
+* Help carries the version and the log. The commit belongs in `--version`, where someone is
+  asking; "why is it not connecting" is still a terminal command.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 
