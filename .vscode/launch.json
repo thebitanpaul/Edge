@@ -1,44 +1,44 @@
 {
-    "configurations": [
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:Continuous}",
-            "name": "Debug edge",
-            "target": "edge",
-            "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug edge"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:Continuous}",
-            "name": "Release edge",
-            "target": "edge",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release edge"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:Continuous}",
-            "name": "Debug EdgeControls",
-            "target": "EdgeControls",
-            "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug EdgeControls"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:Continuous}",
-            "name": "Release EdgeControls",
-            "target": "EdgeControls",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release EdgeControls"
-        }
-    ]
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Edge}",
+      "name": "Debug edge",
+      "target": "edge",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug edge"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Edge}",
+      "name": "Release edge",
+      "target": "edge",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release edge"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Edge}",
+      "name": "Debug EdgeControls",
+      "target": "EdgeControls",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug EdgeControls"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Edge}",
+      "name": "Release EdgeControls",
+      "target": "EdgeControls",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release EdgeControls"
+    }
+  ]
 }
