@@ -30,8 +30,11 @@ public struct Capabilities: OptionSet, Sendable {
     public static let mediaKeys = Capabilities(rawValue: 1 << 5)
     /// Swapping primary and secondary from either Mac, both changing together.
     public static let roleSwitch = Capabilities(rawValue: 1 << 6)
+    /// Forgetting a pairing on both Macs at once.
+    public static let forgetPairing = Capabilities(rawValue: 1 << 7)
 
-    public static let baseline: Capabilities = [.pointer, .keyboard, .scroll, .mediaKeys, .roleSwitch]
+    public static let baseline: Capabilities = [.pointer, .keyboard, .scroll, .mediaKeys,
+                                                 .roleSwitch, .forgetPairing]
 }
 
 public enum MessageType: UInt8, Sendable {
@@ -67,6 +70,8 @@ public enum MessageType: UInt8, Sendable {
     // roles
     case switchRoles       = 0x60
     case requestRoleSwitch = 0x61
+    // pairings
+    case forgetPairing     = 0x62
 }
 
 /// One file in a transfer: what it is called and how big it is.
@@ -159,6 +164,11 @@ public enum Message: Sendable {
     /// Secondary to primary: "swap with me". The primary always drives the swap, because only
     /// it knows the arrangement to hand over.
     case requestRoleSwitch
+    /// "I am forgetting the pairing this link runs on; forget it too." Only ever sent over the
+    /// link itself, so it arrives authenticated by the very key it asks to delete — the one
+    /// thing a stranger cannot produce. With no link, nothing is sent: once a Mac has deleted
+    /// the key it has no way left to prove who it is.
+    case forgetPairing
 
     public var type: MessageType {
         switch self {
@@ -187,6 +197,7 @@ public enum Message: Sendable {
         case .fileDrop:     return .fileDrop
         case .switchRoles:  return .switchRoles
         case .requestRoleSwitch: return .requestRoleSwitch
+        case .forgetPairing: return .forgetPairing
         }
     }
 }
@@ -223,7 +234,7 @@ public enum Codec {
         case let .authProof(proof):
             w.blob(proof)
 
-        case .ready, .leaveScreen, .fileRequest, .fileDrop, .requestRoleSwitch:
+        case .ready, .leaveScreen, .fileRequest, .fileDrop, .requestRoleSwitch, .forgetPairing:
             break
 
         case let .ping(seq, t), let .pong(seq, t):
@@ -325,6 +336,7 @@ public enum Codec {
             case .fileRequest:  return .fileRequest
             case .fileDrop:     return .fileDrop
             case .requestRoleSwitch: return .requestRoleSwitch
+            case .forgetPairing: return .forgetPairing
             case .switchRoles:
                 return .switchRoles(edge: try r.string(), alignment: try r.string())
             case .leaveScreen:  return .leaveScreen

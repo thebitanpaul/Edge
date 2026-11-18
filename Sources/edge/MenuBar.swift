@@ -307,6 +307,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             applyRoleSwitch(note)
             return
         }
+        // The other Mac forgot this one; the session has already removed the pairing.
+        if let note = ForgottenNote.take() {
+            if isRunning { stopSession() }
+            notify("\(note.peerName) forgot this Mac", "Pair again to use it.")
+            publishControlState()
+        }
         lastKnownState = currentState
         updateBlinking()
         announceLinkProblemIfNeeded()
@@ -966,13 +972,39 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func performForget(_ label: String?) {
         guard let label else { return }
+        let store = (try? SecretStore.load()) ?? SecretStore()
+        guard let pairing = store.pairings.first(where: { $0.label == label }) else { return }
+
+        // Both Macs forget only when this one can still tell the other: connected through this
+        // very pairing, to a build that understands. Otherwise the other Mac keeps its copy,
+        // and the only honest thing is to say so before anything is deleted.
+        let state = currentState
+        let bothForget = state?.connected == true
+            && state?.pairingKeyID == pairing.keyIDHex
+            && Capabilities(rawValue: state?.peerCapabilities ?? 0).contains(.forgetPairing)
+
         let confirm = NSAlert()
         confirm.messageText = "Forget “\(label)”?"
-        confirm.informativeText = "You'll need to pair again to use it."
+        confirm.informativeText = bothForget
+            ? "It will be forgotten on both Macs."
+            : "Forget this Mac on “\(label)” too."
         confirm.addButton(withTitle: "Forget")
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
+        guard bothForget, let pid = state?.pid else {
+            forgetLocally(label)
+            return
+        }
+        // The session sends the request over the link, which has to still be up to carry it:
+        // a moment for it to go out, then this side deletes its copy and stops.
+        kill(pid, SIGUSR2)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.forgetLocally(label)
+        }
+    }
+
+    private func forgetLocally(_ label: String) {
         do {
             var store = try SecretStore.load()
             store.pairings.removeAll { $0.label == label }

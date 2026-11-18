@@ -134,6 +134,8 @@ extension Commands {
                 $0.connected = true
                 $0.peerName = peer.name
                 $0.endpoint = peer.endpoint
+                $0.pairingKeyID = Crypto.hex(peer.keyID)
+                $0.peerCapabilities = peer.capabilities.rawValue
                 $0.save()
             }
             ok("link up  ←  \(Style.bold(peer.name))  [\(peer.deviceID.short)]  \(peer.endpoint)")
@@ -206,6 +208,15 @@ extension Commands {
             if !session.requestRoleSwitch() {
                 RoleSwitchNote(becomePrimary: true, otherMacFollows: false).write()
             }
+        }
+        Runtime.onForgetSignal = { session.sendForget() }
+        session.onForgotten = { peer in
+            try? directory.mutate { store in
+                store.pairings.removeAll { Crypto.constantTimeEquals($0.keyID, peer.keyID) }
+            }
+            ForgottenNote(peerName: peer.name).write()
+            warn("\(peer.name) forgot this Mac — the pairing is gone here too")
+            DispatchQueue.main.async { Runtime.interrupted = true }
         }
 
         // Noticing a new pairing matters more than it sounds: without it, a session that was
@@ -420,9 +431,31 @@ extension Commands {
         }
         Runtime.onRoleSwitchSignal = handOver
 
+        // Forgetting. Asked by this Mac's menu-bar app, which deletes the pairing itself once
+        // this has gone out; or told by the other Mac, in which case this side deletes it.
+        Runtime.onForgetSignal = { [weak link] in
+            guard let link, link.peer?.capabilities.contains(.forgetPairing) == true else { return }
+            link.send(.forgetPairing)
+            info("asked \(peerLabel) to forget this Mac")
+        }
+        let forgottenByPeer: () -> Void = { [weak link] in
+            guard let keyID = link?.peer?.keyID else { return }
+            try? directory.mutate { store in
+                store.pairings.removeAll { Crypto.constantTimeEquals($0.keyID, keyID) }
+            }
+            ForgottenNote(peerName: peerLabel).write()
+            warn("\(peerLabel) forgot this Mac — the pairing is gone here too")
+            // Nothing left to dial with that key; end as a deliberate stop would.
+            Runtime.interrupted = true
+        }
+
         link.onMessage = { message in
             if case .requestRoleSwitch = message {
                 DispatchQueue.main.async { handOver() }
+                return
+            }
+            if case .forgetPairing = message {
+                DispatchQueue.main.async { forgottenByPeer() }
                 return
             }
             heartbeat.handle(message)
@@ -461,6 +494,8 @@ extension Commands {
             $0.connected = true
             $0.peerName = peer.name
             $0.endpoint = peer.endpoint
+            $0.pairingKeyID = Crypto.hex(peer.keyID)
+            $0.peerCapabilities = peer.capabilities.rawValue
             $0.via = target.via
             $0.lastError = nil
             $0.save()
@@ -676,6 +711,16 @@ final class ReceivingSession {
     private var currentLinkID: ObjectIdentifier?
 
     /// Whether `linkID` is the link this session is attached to now.
+    /// The other Mac has forgotten the pairing this link runs on.
+    var onForgotten: ((PeerInfo) -> Void)?
+
+    /// Tells the other Mac to forget this one, if it understands the request.
+    func sendForget() {
+        lock.lock(); let link = self.link; lock.unlock()
+        guard let link, link.peer?.capabilities.contains(.forgetPairing) == true else { return }
+        link.send(.forgetPairing)
+    }
+
     /// Asks the primary to swap roles. False if there is no one to ask who understands.
     func requestRoleSwitch() -> Bool {
         lock.lock(); let link = self.link; lock.unlock()
@@ -733,6 +778,10 @@ final class ReceivingSession {
 
         case let .flagsChanged(flags):
             injector.changeFlags(flags)
+
+        case .forgetPairing:
+            lock.lock(); let peer = link?.peer; lock.unlock()
+            if let peer { onForgotten?(peer) }
 
         case let .switchRoles(edge, alignment):
             // The primary is handing over. The menu-bar app restarts this Mac as the primary

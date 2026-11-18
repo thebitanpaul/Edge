@@ -178,6 +178,7 @@ struct CodecTests {
         .mediaKey(key: 23, down: false, isRepeat: true),
         .switchRoles(edge: "left", alignment: "proportional"),
         .requestRoleSwitch,
+        .forgetPairing,
         .screenInfo(displays: []),
         .screenInfo(displays: (0..<4).map { Display(x: Int32($0), y: 0, width: 100, height: 100, isMain: $0 == 0) }),
         .clipboard(kind: "public.utf8-plain-text", payload: Data("hello".utf8)),

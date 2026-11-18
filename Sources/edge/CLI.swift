@@ -169,11 +169,15 @@ enum Runtime {
     /// What SIGUSR1 means to this session: the menu-bar app asking it to swap roles with the
     /// other Mac, over the link only the session holds.
     nonisolated(unsafe) static var onRoleSwitchSignal: (() -> Void)?
+    /// What SIGUSR2 means: the menu-bar app is forgetting the Mac at the other end of the
+    /// link, and the session should tell it to forget this one before the link goes.
+    nonisolated(unsafe) static var onForgetSignal: (() -> Void)?
 
     static func installSignalHandlers() {
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
         signal(SIGUSR1, SIG_IGN)
+        signal(SIGUSR2, SIG_IGN)
         let int = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         for src in [int, term] {
@@ -183,8 +187,11 @@ enum Runtime {
         let usr1 = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
         usr1.setEventHandler { onRoleSwitchSignal?() }
         usr1.resume()
+        let usr2 = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+        usr2.setEventHandler { onForgetSignal?() }
+        usr2.resume()
         // Keep the sources alive for the process lifetime.
-        sources = [int, term, usr1]
+        sources = [int, term, usr1, usr2]
     }
 
     nonisolated(unsafe) private static var sources: [DispatchSourceSignal] = []

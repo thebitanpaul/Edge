@@ -85,9 +85,24 @@ struct RoleSwitchTests {
         #expect(alignment == "center")
     }
 
-    @Test("new builds advertise role switching, so older ones are never asked")
+    @Test("new builds advertise role switching and forgetting, so older ones are never asked")
     func capability() {
         #expect(Capabilities.baseline.contains(.roleSwitch))
+        #expect(Capabilities.baseline.contains(.forgetPairing))
+    }
+
+    @Test("a state file from an older build, without the pairing fields, still loads")
+    func olderStateLoads() throws {
+        var state = RuntimeState(role: .sharing, peerName: "Work Mac")
+        state.connected = true
+        var object = try #require(try JSONSerialization.jsonObject(
+            with: JSONEncoder.edgeJSON.encode(state)) as? [String: Any])
+        object.removeValue(forKey: "pairingKeyID")
+        object.removeValue(forKey: "peerCapabilities")
+        let old = try JSONSerialization.data(withJSONObject: object)
+        let loaded = try JSONDecoder.edgeJSON.decode(RuntimeState.self, from: old)
+        #expect(loaded.connected)
+        #expect(loaded.pairingKeyID == nil)
     }
 
     @Test("a note survives the trip from session to app")

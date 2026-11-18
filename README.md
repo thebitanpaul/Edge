@@ -136,7 +136,9 @@ If nothing is found, press **Search again**. For a network that blocks discovery
 there is a terminal escape hatch — `edge pair nearby --address <the other Mac>` — kept
 out of the menu because it is almost never the right answer.
 
-A pairing appears under **Devices** as soon as it succeeds.
+A pairing appears under **Devices** as soon as it succeeds. **Forget** there removes it from
+both Macs while they are connected; otherwise forget it on the other Mac too. (It is only ever
+sent over the link itself, so nobody without the pairing key can make a Mac forget one.)
 
 There used to be a typed code. It is gone, and not because it was fiddly: it is two separate
 manual actions with no feedback until much later, so re-pairing one Mac and not the other left

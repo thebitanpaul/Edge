@@ -45,6 +45,11 @@ public struct RuntimeState: Codable, Sendable {
     /// succeeds over the slow link. Without it, a pointer that drags looks like a bug in the
     /// forwarding rather than like 200 ms of Wi-Fi.
     public var via: String?
+    /// Which pairing the current link runs on, as `Pairing.keyIDHex`, and what the Mac on the
+    /// other end can do — so the menu-bar app can say before you confirm whether forgetting
+    /// that Mac will reach it too.
+    public var pairingKeyID: String?
+    public var peerCapabilities: UInt32?
 
     public init(role: Role, peerName: String? = nil) {
         self.role = role
@@ -154,6 +159,35 @@ public struct RoleSwitchNote: Codable, Sendable {
         defer { try? FileManager.default.removeItem(at: url) }
         guard let data = try? Data(contentsOf: url),
               let note = try? JSONDecoder.edgeJSON.decode(RoleSwitchNote.self, from: data),
+              Date().timeIntervalSince(note.at) < 60 else { return nil }
+        return note
+    }
+}
+
+/// Left by a session whose pairing the other Mac has just forgotten, for the menu-bar app to
+/// say so — otherwise the pairing simply vanishes from the menu with no reason given.
+public struct ForgottenNote: Codable, Sendable {
+    public var peerName: String
+    public var at: Date
+
+    public init(peerName: String) {
+        self.peerName = peerName
+        self.at = Date()
+    }
+
+    static var url: URL { Paths.supportDirectory.appendingPathComponent("forgotten.json") }
+
+    public func write() {
+        guard let data = try? JSONEncoder.edgeJSON.encode(self) else { return }
+        _ = try? Paths.ensureSupportDirectory()
+        try? AtomicFile.write(data, to: Self.url, mode: 0o600)
+    }
+
+    public static func take() -> ForgottenNote? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let data = try? Data(contentsOf: url),
+              let note = try? JSONDecoder.edgeJSON.decode(ForgottenNote.self, from: data),
               Date().timeIntervalSince(note.at) < 60 else { return nil }
         return note
     }
