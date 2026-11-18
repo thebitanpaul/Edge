@@ -10,6 +10,12 @@ final class ArrangementView: NSView {
     var layout: ScreenLayout?
     var localName = "This Mac"
     var remoteName = "The other Mac"
+    /// The other Mac's screens are a guess, because the two have never spoken.
+    ///
+    /// Drawn dashed rather than withheld. Which side the other Mac sits on is something you
+    /// know by looking at your desk, not by looking at this window — so there is no reason to
+    /// make you connect first and come back.
+    var isPlaceholder = false
 
     override var isFlipped: Bool { true }   // screen coordinates run downwards
 
@@ -45,12 +51,14 @@ final class ArrangementView: NSView {
             for rect in rects {
                 let frame = place(rect).insetBy(dx: 1.5, dy: 1.5)
                 let path = NSBezierPath(roundedRect: frame, xRadius: 5, yRadius: 5)
+                let guessed = !isLocal && isPlaceholder
                 (isLocal ? NSColor.controlAccentColor.withAlphaComponent(0.18)
-                         : NSColor.systemGray.withAlphaComponent(0.16)).setFill()
+                         : NSColor.systemGray.withAlphaComponent(guessed ? 0.07 : 0.16)).setFill()
                 path.fill()
                 (isLocal ? NSColor.controlAccentColor
                          : NSColor.systemGray).setStroke()
                 path.lineWidth = isLocal ? 2 : 1.5
+                if guessed { path.setLineDash([6, 4], count: 2, phase: 0) }
                 path.stroke()
             }
         }
@@ -209,20 +217,26 @@ final class ArrangementWindowController: NSWindowController {
         let identity = try? Identity.loadOrCreate()
         view.localName = identity?.deviceName ?? "This Mac"
 
-        guard let pairing = store.pairings.first(where: { ($0.peerDisplays?.isEmpty == false) }),
-              let remote = pairing.peerDisplays else {
-            view.layout = nil
-            note.stringValue = "Connect the two Macs once and the arrangement appears here."
-            view.needsDisplay = true
-            return
-        }
-
-        view.remoteName = pairing.peerName ?? pairing.label
-        view.layout = ScreenLayout(localDisplays: Displays.current(), remoteDisplays: remote,
+        let known = store.pairings.first { $0.peerDisplays?.isEmpty == false }
+        let pairing = known ?? store.pairings.first
+        // Before the two Macs have ever spoken there is nothing to draw for the far side, so
+        // stand this Mac's own screens in for it and draw them dashed. The alternative —
+        // refusing to show anything until they have connected — meant the one moment you most
+        // want to say where the other Mac sits is the one moment you cannot.
+        let local = Displays.current()
+        let remote = known?.peerDisplays ?? local
+        view.isPlaceholder = known == nil
+        view.remoteName = pairing?.peerName ?? pairing?.label ?? "The other Mac"
+        view.layout = ScreenLayout(localDisplays: local, remoteDisplays: remote,
                                    edge: config.edge, alignment: config.alignment)
-        note.stringValue = view.layout == nil
-            ? "No displays to arrange."
-            : "\(Displays.current().count) screen(s) here, \(remote.count) there"
+
+        if view.layout == nil {
+            note.stringValue = "No displays to arrange."
+        } else if known == nil {
+            note.stringValue = "Its screens are a guess until the two Macs connect"
+        } else {
+            note.stringValue = "\(local.count) screen(s) here, \(remote.count) there"
+        }
         view.needsDisplay = true
     }
 

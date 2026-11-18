@@ -244,8 +244,20 @@ extension Commands {
             return
         }
 
+        // Nothing lands until the drag is let go, so the check has to let go of it. Waiting
+        // for the bytes first, because that is the order the real thing usually has.
+        _ = Runtime.wait(until: { finished.value || failure.value != nil }, timeout: 30)
+
+        // The whole point of staging: a file that has finished crossing is still nowhere to
+        // be seen until the drag is let go. Watching one appear in Downloads while you are
+        // still holding it is the confusing half of this feature.
+        let early = (try? fm.contentsOfDirectory(atPath: inbox.path)) ?? []
+        record("nothing lands before you let go", early.isEmpty,
+               early.isEmpty ? "staged, not saved" : "appeared early: \(early.joined(separator: ", "))")
+
+        receiver.drop(from: "selftest")
         let arrived = Runtime.wait(until: { !landed.value.isEmpty || failure.value != nil },
-                                   timeout: 30)
+                                   timeout: 10)
         _ = Runtime.wait(until: { finished.value }, timeout: 5)
         link.close(reason: "selftest done")
         Thread.sleep(forTimeInterval: 0.15)

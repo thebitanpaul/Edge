@@ -65,7 +65,7 @@ extension Commands {
             if !args.bool("force") {
                 out()
                 info("Grant it and run `edge listen` again, or pass --force to listen anyway.")
-                throw ExitSilently(code: 1)
+                throw ExitSilently(code: Runtime.exitMissingPermission)
             }
         }
 
@@ -215,7 +215,7 @@ extension Commands {
     private enum SessionOutcome {
         case ended                  // closed cleanly, or the user stopped it
         case dropped(Error?)        // lost the link; worth retrying
-        case fatal(String)          // retrying would fail the same way
+        case fatal(String, code: Int32 = 1)   // retrying would fail the same way
 
         var isRetryable: Bool {
             if case .dropped = self { return true }
@@ -255,9 +255,9 @@ extension Commands {
             switch outcome {
             case .ended:
                 return
-            case .fatal(let reason):
+            case let .fatal(reason, code):
                 Log.debug("not retrying: \(reason)")
-                throw ExitSilently(code: 1)
+                throw ExitSilently(code: code)
             case .dropped(let error):
                 guard retry, !Runtime.interrupted else {
                     if let error { bad(error.localizedDescription) }
@@ -343,7 +343,15 @@ extension Commands {
 
         sharing?.onFilesSent = { count, problem in
             if let problem { warn("files did not cross: \(problem)") }
-            else { ok("sending \(count) file(s) to \(peerLabel)") }
+            else { ok("carrying \(count) file(s) to \(peerLabel) — they land when you let go") }
+        }
+
+        // The release of the button, wherever the pointer happens to be. Told to both ends
+        // because either of them may be holding staged files: the far one when the drag went
+        // out, this one when it came back.
+        sharing?.onDrop = { [weak link] in
+            link?.send(.fileDrop)
+            files.drop(from: link?.peer?.name ?? "the other Mac")
         }
 
         link.onReady = { peer in
@@ -435,7 +443,7 @@ extension Commands {
                 bad("Input Monitoring is not granted — the pointer would cross over but the keyboard would not follow")
                 explainCapturePermissions()
                 link.close(reason: "missing Input Monitoring")
-                return .fatal("missing Input Monitoring")
+                return .fatal("missing Input Monitoring", code: Runtime.exitMissingPermission)
             }
 
             if !sharing.isCapturing {
@@ -450,7 +458,10 @@ extension Commands {
                     bad(error.localizedDescription)
                     explainCapturePermissions()
                     link.close(reason: "could not capture input")
-                    return .fatal("could not install the event tap")
+                    // Almost always a permission that was granted to a different build of
+                    // this app, so it reads as granted in Settings and is not.
+                    return .fatal("could not install the event tap",
+                                  code: Runtime.exitMissingPermission)
                 }
             }
             sharing.onModeChange = { mode in

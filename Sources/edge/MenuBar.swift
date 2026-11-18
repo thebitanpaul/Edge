@@ -49,6 +49,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var blinkOn = true
     /// Pending retry of the secondary's listener, cancelled whenever one starts by any route.
     private var autoStartWork: DispatchWorkItem?
+    /// Last answer from the privacy database, and when it was asked. Asking is a round trip
+    /// to another process, so it is not worth doing twice a second.
+    private var permissionsWereGranted = true
+    private var lastPermissionCheck = Date.distantPast
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
 
@@ -86,8 +90,100 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+        // Before anything reads it: an agent under the old name starts a bundle that no
+        // longer exists, every login, with nothing in the interface to say so.
+        LaunchAgent.removeFormerAgent()
+        permissionsWereGranted = missingPermissions.isEmpty
+        // Anyone who already has a pairing has been through this; the flag is new, they are not.
+        if !setupCompleted, !(((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty) {
+            setupCompleted = true
+        }
         refresh()
-        autoStartIfSecondary()
+
+        // Asked for at launch rather than at the first attempt to use them. Being told what
+        // an app needs before it needs it is the difference between a decision and an
+        // interruption.
+        //
+        // Deferred a turn: this runs before NSApplication.run(), and an alert raised from
+        // there spins a modal loop inside a loop that has not started yet.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.ensurePermissions() { self.autoStartIfSecondary() }
+        }
+    }
+
+    // MARK: - Permissions
+
+    /// What macOS has to be told to allow, for the role this Mac is playing.
+    ///
+    /// The secondary only ever *posts* events, which is Accessibility. The primary also has
+    /// to *read* this keyboard, and that is a second, separate grant — which is why a Mac can
+    /// move a pointer perfectly and then do nothing at all when you type.
+    private struct MissingPermission {
+        let name: String
+        let why: String
+        let settingsURL: String
+    }
+
+    private var missingPermissions: [MissingPermission] {
+        var missing: [MissingPermission] = []
+        if !Permissions.accessibility().isGranted {
+            missing.append(MissingPermission(
+                name: "Accessibility",
+                why: mode == .host ? "to let the pointer cross to the other Mac"
+                                   : "to move this Mac's pointer and type on it",
+                settingsURL: Permissions.accessibilitySettingsURL))
+        }
+        if mode == .host, !Permissions.inputMonitoring().isGranted {
+            missing.append(MissingPermission(
+                name: "Input Monitoring",
+                why: "to read this keyboard and send it across",
+                settingsURL: Permissions.inputMonitoringSettingsURL))
+        }
+        return missing
+    }
+
+    /// True when everything needed is granted. Otherwise it says so and opens the right pane.
+    ///
+    /// Called before anything tries to start. Without it the session process exits a second
+    /// later with the reason in a log file, which is not somewhere anyone looks when an app
+    /// simply does nothing.
+    @discardableResult
+    private func ensurePermissions(explaining: Bool = true) -> Bool {
+        let missing = missingPermissions
+        guard !missing.isEmpty else { return true }
+        guard explaining else { return false }
+
+        // The system's own prompt first, when macOS has not yet made up its mind — it is the
+        // one that can grant without a trip through Settings.
+        _ = Permissions.accessibility(prompt: true)
+        if mode == .host, Permissions.inputMonitoring() == .undetermined {
+            Permissions.requestInputMonitoring()
+        }
+        if missingPermissions.isEmpty { return true }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = missing.count == 1
+            ? "Edge needs \(missing[0].name)"
+            : "Edge needs two permissions"
+        alert.informativeText =
+            missing.map { "\($0.name) — \($0.why)" }.joined(separator: "\n")
+            + "\n\nThese are safe to grant here: Edge talks only to the Mac you paired it "
+            + "with, over your own network. There is no server, and nothing leaves your desk."
+        for item in missing { alert.addButton(withTitle: "Open \(item.name)") }
+        alert.addButton(withTitle: "Later")
+
+        let answer = alert.runModal()
+        let index = answer.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        if index >= 0, index < missing.count {
+            Permissions.openSettings(missing[index].settingsURL)
+            if Permissions.isRunningInsideAppBundle {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(Bundle.main.bundlePath, forType: .string)
+            }
+        }
+        return false
     }
 
     // MARK: - One Mac drives
@@ -127,6 +223,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "stoppedByHand") }
     }
 
+    /// Whether this Mac has been through setup and run at least once.
+    ///
+    /// Setting up is a sequence with one right answer at each step, so everything that is a
+    /// *preference* rather than a step stays out of the menu until it is over. Which link to
+    /// use is the clearest example: it has a sensible default, and offering it to someone who
+    /// has not yet connected once is offering them a way to get it wrong.
+    private var setupCompleted: Bool {
+        get { UserDefaults.standard.bool(forKey: "setupCompleted") }
+        set { UserDefaults.standard.set(newValue, forKey: "setupCompleted") }
+    }
+
     // MARK: - State
 
     private var currentState: RuntimeState? {
@@ -163,6 +270,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         lastKnownState = currentState
         updateBlinking()
         announceLinkProblemIfNeeded()
+        checkPermissionsOccasionally()
 
         // Only redraw when it would differ. Touching an NSStatusItem button makes AppKit
         // reconsider the cursor, and doing that twice a second un-hid the cursor the session
@@ -240,9 +348,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let state = lastKnownState
         let store = (try? SecretStore.load()) ?? SecretStore()
 
+        // Above everything else, including "Not set up": nothing below can work without it,
+        // and a Mac that has not been set up yet is exactly where someone meets this first.
+        func addPermissionItems() {
+            for item in missingPermissions {
+                menu.addItem(.separator())
+                menu.addItem(disabled("\(item.name) is off — \(item.why)"))
+                let grant = action("Grant \(item.name)", #selector(grantPermission(_:)))
+                grant.representedObject = item.settingsURL
+                menu.addItem(grant)
+            }
+        }
+
         if store.pairings.isEmpty {
             menu.addItem(disabled("Not set up"))
             menu.addItem(action("Set up", #selector(runSetup)))
+            addPermissionItems()
             menu.addItem(.separator())
             menu.addItem(action("Quit", #selector(quit)))
             return
@@ -279,6 +400,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(disabled(waitingHint))
         }
 
+        addPermissionItems()
+
         // A link that cannot exist is worth saying out loud rather than retrying in silence.
         if let problem = linkProblem {
             menu.addItem(.separator())
@@ -297,7 +420,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // them on the secondary invited changes that silently did nothing.
         if mode == .host {
             menu.addItem(arrangementMenuItem())
-            menu.addItem(linkMenuItem())
+            if setupCompleted { menu.addItem(linkMenuItem()) }
         }
 
         let config = (try? Config.load()) ?? Config()
@@ -418,6 +541,32 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
+    /// Notices a permission being taken away, and being given back.
+    ///
+    /// Revoking one does not stop the app politely: the event tap goes dead and this Mac
+    /// quietly stops being able to do the one thing it is for. Noticing within a couple of
+    /// seconds and saying so is better than leaving someone to work out why.
+    private func checkPermissionsOccasionally() {
+        guard Date().timeIntervalSince(lastPermissionCheck) > 2 else { return }
+        lastPermissionCheck = Date()
+
+        let granted = missingPermissions.isEmpty
+        defer { permissionsWereGranted = granted }
+        guard granted != permissionsWereGranted else { return }
+
+        if granted {
+            autoStartIfSecondary()
+        } else {
+            stopSession()
+            ensurePermissions()
+        }
+    }
+
+    @objc private func grantPermission(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? String else { return }
+        Permissions.openSettings(url)
+    }
+
     @objc private func switchToWiFi() {
         applyConfig { $0.preferredLink = LinkPreference.auto.rawValue }
     }
@@ -481,6 +630,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         let store = (try? SecretStore.load()) ?? SecretStore()
         if store.pairings.isEmpty {
+            // Whichever connects. Nothing is known yet about what this desk has, and a
+            // preference chosen before the first connection is a guess that can only fail.
+            applyConfig { $0.preferredLink = LinkPreference.auto.rawValue }
             performPairNearby()
             return
         }
@@ -715,9 +867,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             store.pairings.append(pairing)
             try store.save()
             restartForPairingChange()
-            notify("Paired with \(outcome.peerName)",
-                   "Set the other Mac to \(mode.opposite.shortTitle).")
-            autoStartIfSecondary()
+            // Straight on to the next step rather than back to a menu. The primary says
+            // where the other Mac sits and presses Start; the secondary has nothing to decide
+            // and has already made itself ready.
+            if mode == .host {
+                notify("Paired with \(outcome.peerName)",
+                       "Now say where its screen sits, then press Start.")
+                // One turn of the run loop, so the pairing window is fully gone first.
+                DispatchQueue.main.async { [weak self] in self?.performShowArrangement() }
+            } else {
+                notify("Paired with \(outcome.peerName)",
+                       "This Mac is ready. Press Start on the primary.")
+                autoStartIfSecondary()
+            }
         } catch {
             notify("Could not save the pairing", error.localizedDescription)
         }
@@ -888,15 +1050,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleLoginItem() {
+        let wasOn = LaunchAgent.installedRole != nil
         do {
-            if LaunchAgent.installedRole != nil {
+            if wasOn {
                 try LaunchAgent.uninstall()
             } else {
                 try LaunchAgent.install(role: mode.runtimeRole, extraArguments: [])
                 try LaunchAgent.start()
             }
         } catch {
-            notify("Could not change the login item", error.localizedDescription)
+            notify("Could not change this", error.localizedDescription)
+            refresh()
+            return
+        }
+
+        // Check rather than assume. A tick that does not match what will happen at login is
+        // the one kind of wrong this switch can be, and it is invisible until the next login.
+        let isOn = LaunchAgent.installedRole != nil
+        if isOn == wasOn {
+            notify("Could not change this",
+                   wasOn ? "Turn Edge off under System Settings ▸ General ▸ Login Items."
+                         : "Edge could not install its login item.")
         }
         refresh()
     }
@@ -919,6 +1093,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func startSession() {
         guard session?.isRunning != true else { return }
+        // Checked here rather than left to the session to discover. The session is a child
+        // process: when it exits over a missing checkbox there is nothing on screen at all.
+        guard ensurePermissions() else {
+            autoStartWork?.cancel()
+            autoStartWork = nil
+            refresh()
+            return
+        }
         guard let executable = Bundle.main.executableURL else {
             notify("Cannot start", "Edge could not find its own binary.")
             return
@@ -960,7 +1142,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.session = nil
-                if finished.terminationStatus != 0 && finished.terminationReason != .uncaughtSignal {
+                if finished.terminationStatus == Runtime.exitMissingPermission {
+                    // Never retried. Restarting on a timer is right for a dropped link and
+                    // exactly wrong here: it turns a missing checkbox into a process that
+                    // dies and respawns for ever, silently, which is what this looked like.
+                    self.autoStartWork?.cancel()
+                    self.autoStartWork = nil
+                    self.ensurePermissions()
+                } else if finished.terminationStatus != 0
+                            && finished.terminationReason != .uncaughtSignal {
                     // The secondary is meant to stay ready, so a session that fell over comes
                     // back by itself rather than needing someone to walk over to that Mac.
                     if self.mode == .client && !self.stoppedByHand {
@@ -977,6 +1167,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         do {
             try process.run()
             session = process
+            setupCompleted = true
         } catch {
             notify("Could not start", error.localizedDescription)
         }

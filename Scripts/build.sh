@@ -41,6 +41,24 @@ if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_ID
   fi
 fi
 
+# Anything in build/ left over from a previous name. A stale Continuous.app is not inert:
+# it holds its own privacy grants, it is what a login item installed before the rename still
+# points at, and `continuous` on a PATH keeps running it long after it stopped being the app.
+for STALE in "$ROOT"/build/*.app; do
+  [ -e "$STALE" ] || continue
+  if [ "$STALE" != "$APP" ]; then
+    echo "==> Removing $(basename "$STALE") — left over from an earlier name"
+    rm -rf "$STALE"
+  fi
+done
+for STALE in "$ROOT"/build/*; do
+  [ -f "$STALE" ] && [ -x "$STALE" ] || continue
+  if [ "$(basename "$STALE")" != "edge" ]; then
+    echo "==> Removing stale launcher $(basename "$STALE")"
+    rm -f "$STALE"
+  fi
+done
+
 echo "==> Building ($CONFIG)"
 swift build -c "$CONFIG"
 BIN="$(swift build -c "$CONFIG" --show-bin-path)/edge"
@@ -112,6 +130,11 @@ PLIST
 # Scripts/create-signing-identity.sh makes one; this picks it up automatically if it exists.
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
   echo "==> Signing as \"$SIGNING_IDENTITY\" (stable identity — permissions survive rebuilds)"
+  if [ "$SIGNING_IDENTITY" != "Edge Local Signing" ]; then
+    echo "    That certificate still has the old name. It is only a label: what makes your"
+    echo "    Accessibility and Input Monitoring grants stick is that the identity does not"
+    echo "    change, so leave it alone. Making a new one would reset them again."
+  fi
 
   # The first signature with a new key makes the keychain put up a dialog, and codesign then
   # waits for it indefinitely. A build that hangs with no explanation is worse than one that
@@ -149,9 +172,14 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
 else
   echo "==> Signing (ad-hoc)"
   codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
-  echo "    note: every rebuild changes this app's identity, so macOS will ask for"
-  echo "          Accessibility and Input Monitoring again. To stop that happening:"
-  echo "              Scripts/create-signing-identity.sh"
+  echo
+  echo "    ⚠ No stable signing identity on this Mac."
+  echo "      An ad-hoc signature identifies the app by the hash of its contents, so every"
+  echo "      rebuild looks like a brand new app and you will be asked for Accessibility and"
+  echo "      Input Monitoring again each time. Run this once to stop that:"
+  echo
+  echo "          Scripts/create-signing-identity.sh"
+  echo
 fi
 codesign --verify --verbose=1 "$APP" 2>&1 | sed 's/^/    /'
 

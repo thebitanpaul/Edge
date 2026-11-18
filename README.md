@@ -393,8 +393,12 @@ Turn it on at both ends; neither Mac sends a clipboard to a Mac that did not ask
 
 On by default, and unlike the clipboard nothing crosses unless you deliberately drag it.
 
-Pick a file up and push it against the shared edge. The pointer goes through, carrying the
-file with it, and it lands in **Downloads** on the other Mac with a Finder window showing it.
+Pick a file up and push it against the shared edge. The pointer goes through carrying the
+file, and the moment you **let go** it lands in Downloads on the other Mac, with a Finder
+window showing it. It is held in a staging folder until then: watching a file appear in
+Downloads while you are still holding it is a confusing thing to see, because the drop
+visibly has not happened yet. Bring the pointer back without letting go and nothing lands.
+
 It works in both directions: drag something on the far Mac back towards the edge you came
 from and it arrives here. A folder is zipped on the way, the same as Finder's Compress.
 

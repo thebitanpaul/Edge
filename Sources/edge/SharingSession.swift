@@ -66,10 +66,17 @@ final class SharingSession {
     private var swallowNextMouseUp = false
     /// Throttles the pasteboard peek; reading it on every movement is a round trip per event.
     private var lastDragPeek = Date.distantPast
+    /// Files have been handed over and the button is still down. The release is the drop.
+    private var awaitingDrop = false
 
     var onModeChange: ((Mode) -> Void)?
     /// Called when files start crossing, so the session can say so.
     var onFilesSent: ((Int, String?) -> Void)?
+    /// Called when the button carrying a file drag is released.
+    ///
+    /// This Mac owns the physical mouse, so it is the only one that can know. Whichever
+    /// direction the files are travelling, nothing lands until this has happened.
+    var onDrop: (() -> Void)?
     /// Whether this Mac will carry dragged files at all.
     var filesEnabled = true
     /// Whether the other Mac said it would accept them. Until it has, a file drag stops at
@@ -237,7 +244,11 @@ final class SharingSession {
                 router.allowCrossing = heldButtons.isEmpty
                 let swallow = b == .left && swallowNextMouseUp
                 if swallow { swallowNextMouseUp = false }
+                let dropping = b == .left && awaitingDrop
+                if dropping { awaitingDrop = false }
                 lock.unlock()
+                // The drop. Files have been staged on the far side and are waiting for this.
+                if dropping { onDrop?() }
                 // The button that was held for a file drag. The drag ended here when the
                 // files were taken over; releasing it must not also click over there.
                 if swallow { return nil }
@@ -328,6 +339,7 @@ final class SharingSession {
         pendingDragFiles = []
         guard !files.isEmpty else { lock.unlock(); return }
         swallowNextMouseUp = true
+        awaitingDrop = true
         heldButtons.removeAll()
         lock.unlock()
 
@@ -352,6 +364,14 @@ final class SharingSession {
         }
     }
 
+    private func cancelUndroppedTransfer() {
+        lock.lock()
+        let inFlight = awaitingDrop ? sender : nil
+        if inFlight != nil { awaitingDrop = false }
+        lock.unlock()
+        inFlight?.cancel(reason: "the pointer came back before you let go")
+    }
+
     /// Asks the other Mac whether the drag coming back carries files.
     ///
     /// Only that Mac can see its own drag pasteboard, and it is about to lose the drag: the
@@ -362,6 +382,7 @@ final class SharingSession {
         let held = !heldButtons.isEmpty
         lock.unlock()
         guard filesEnabled, peerAcceptsFiles, held, let link else { return }
+        lock.lock(); awaitingDrop = true; lock.unlock()
         link.send(.fileRequest)
     }
 
@@ -471,6 +492,9 @@ final class SharingSession {
         // First thing, before anything can warp the cursor back to the parking spot again.
         stopHolding()
         stopWatchingDrift()
+        // Coming back without having let go means you changed your mind, so take the files
+        // back too rather than landing them somewhere you decided not to put them.
+        cancelUndroppedTransfer()
         // Ahead of leaveScreen, which is what releases the drag on the other Mac.
         requestFilesFromPeer(link)
         link?.send(.leaveScreen)

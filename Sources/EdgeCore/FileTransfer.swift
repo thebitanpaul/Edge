@@ -202,6 +202,16 @@ public final class FileReceiver {
     private var names: [String] = []
     private var expected: UInt64 = 0
     private var received: UInt64 = 0
+    /// All the bytes have arrived.
+    private var complete = false
+    /// The person holding the mouse has let go.
+    ///
+    /// Both have to be true before anything appears in the destination. They arrive in
+    /// either order: a small file finishes crossing long before you let go of it, and a
+    /// large one is still arriving after you have.
+    private var dropped = false
+    /// What is being carried, for anything that wants to say so.
+    public private(set) var incoming: [String] = []
     private var handles: [Int: FileHandle] = [:]
     private let lock = NSLock()
 
@@ -221,9 +231,30 @@ public final class FileReceiver {
             append(id, Int(index), data)
         case let .fileEnd(id, ok, reason):
             end(id, ok: ok, reason: reason, peerName: peerName)
+        case .fileDrop:
+            drop(from: peerName)
         default:
             break
         }
+    }
+
+    /// The drag has been let go. Lands whatever has finished arriving.
+    ///
+    /// Also called directly, without a message, on the Mac that owns the mouse: it watched
+    /// the button come up itself and has no one to hear it from.
+    public func drop(from peerName: String = "the other Mac") {
+        lock.lock()
+        guard transfer != nil else { lock.unlock(); return }
+        dropped = true
+        let ready = complete
+        lock.unlock()
+        if ready { commit(peerName: peerName) }
+    }
+
+    /// True while something is being carried but has not landed.
+    public var isCarrying: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return transfer != nil
     }
 
     /// Drops a transfer in progress. Called when the link goes away mid-file, so a half
@@ -257,6 +288,9 @@ public final class FileReceiver {
         staging = stage
         expected = total
         received = 0
+        complete = false
+        dropped = false
+        incoming = files.map { FileTransfer.safeName($0.name) }
         names = files.map { FileTransfer.safeName($0.name) }
         staged = names.map { stage.appendingPathComponent($0) }
         for url in staged {
@@ -295,6 +329,18 @@ public final class FileReceiver {
             return
         }
 
+        complete = true
+        let ready = dropped
+        lock.unlock()
+        // Held in the staging folder until the drag is let go. Appearing in Downloads while
+        // someone is still holding the file is the confusing half of this feature.
+        guard ready else { return }
+        commit(peerName: peerName)
+    }
+
+    private func commit(peerName: String) {
+        lock.lock()
+        guard transfer != nil else { lock.unlock(); return }
         var landed: [URL] = []
         for (url, name) in zip(staged, names) {
             let target = FileTransfer.uniqueURL(for: name, in: directory)
@@ -326,5 +372,8 @@ public final class FileReceiver {
         transfer = nil
         expected = 0
         received = 0
+        complete = false
+        dropped = false
+        incoming = []
     }
 }

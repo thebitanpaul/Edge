@@ -109,6 +109,14 @@ enum Runtime {
     /// a menu where it is noise.
     static let shortVersion = "0.2.0"
 
+    /// Exit status meaning "macOS has not been told to let Edge do this".
+    ///
+    /// Distinct from a general failure because the caller must act on it differently: there
+    /// is nothing to retry, and restarting on a timer — which is right for a dropped link —
+    /// turns a missing checkbox into a process that dies and respawns for ever with nothing
+    /// on screen to say why.
+    static let exitMissingPermission: Int32 = 3
+
     static let version: String = {
         let base = shortVersion
         guard let info = Bundle.main.infoDictionary,

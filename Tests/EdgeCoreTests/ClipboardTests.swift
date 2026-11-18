@@ -525,3 +525,37 @@ struct SendCoalescingTests {
         }
     }
 }
+
+@Suite("Pasted codes with prose around them")
+struct PastedCodeTests {
+
+    /// A regression guard with the odds stacked against it on purpose.
+    ///
+    /// The parser slides a window over every valid code character in the input, and letters
+    /// from the surrounding words are themselves valid ones. An 8-bit checksum passed by
+    /// chance therefore returns a code nobody typed, about once in 256 windows — rare enough
+    /// to pass a test suite for months and still be wrong in front of someone. Two hundred
+    /// codes makes that near-certain to show up if it ever comes back.
+    @Test("prose around a code never produces the wrong code")
+    func prosePrefixesDoNotMisparse() throws {
+        for _ in 0..<200 {
+            let code = PairingCode.generate()
+            for messy in ["code: \(code.formatted)\n",
+                          "Here you go — \(code.formatted). Let me know!",
+                          "  \(code.formatted)  ",
+                          "\"\(code.formatted)\"",
+                          code.formatted.lowercased(),
+                          code.formatted.replacingOccurrences(of: "-", with: " ")] {
+                let parsed = try PairingCode.parse(messy)
+                #expect(parsed.secret == code.secret, "wrong code recovered from: \(messy)")
+            }
+        }
+    }
+
+    /// Nothing around it at all — typed straight into a field — still has to work.
+    @Test("a bare code still parses")
+    func bareCode() throws {
+        let code = PairingCode.generate()
+        #expect(try PairingCode.parse(code.formatted).secret == code.secret)
+    }
+}

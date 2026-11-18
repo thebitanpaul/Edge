@@ -57,6 +57,7 @@ public enum MessageType: UInt8, Sendable {
     case fileChunk    = 0x51
     case fileEnd      = 0x52
     case fileRequest  = 0x53
+    case fileDrop     = 0x54
 }
 
 /// One file in a transfer: what it is called and how big it is.
@@ -134,6 +135,13 @@ public enum Message: Sendable {
     /// *leaving* can see what is on its own drag pasteboard, and it is about to have the
     /// drag released out from under it.
     case fileRequest
+    /// "I have let go." Sent by the Mac holding the physical mouse button, which is the only
+    /// one that knows when a drag ends.
+    ///
+    /// Files are staged until this arrives rather than landing the moment they finish
+    /// crossing. Without it a file appears in Downloads while you are still holding it, which
+    /// is a confusing thing to watch: the drop has visibly not happened yet.
+    case fileDrop
 
     public var type: MessageType {
         switch self {
@@ -158,6 +166,7 @@ public enum Message: Sendable {
         case .fileChunk:    return .fileChunk
         case .fileEnd:      return .fileEnd
         case .fileRequest:  return .fileRequest
+        case .fileDrop:     return .fileDrop
         }
     }
 }
@@ -194,7 +203,7 @@ public enum Codec {
         case let .authProof(proof):
             w.blob(proof)
 
-        case .ready, .leaveScreen, .fileRequest:
+        case .ready, .leaveScreen, .fileRequest, .fileDrop:
             break
 
         case let .ping(seq, t), let .pong(seq, t):
@@ -288,6 +297,7 @@ public enum Codec {
 
             case .ready:        return .ready
             case .fileRequest:  return .fileRequest
+            case .fileDrop:     return .fileDrop
             case .leaveScreen:  return .leaveScreen
 
             case .ping:  return .ping(seq: try r.u32(), sentAt: try r.u64())

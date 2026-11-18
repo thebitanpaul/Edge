@@ -152,10 +152,25 @@ extension Commands {
 /// avoid installing.
 enum LaunchAgent {
     static let label = "app.edge.agent"
+    /// The label this agent had when the app was called Continuous.
+    ///
+    /// An agent is identified by its label, so renaming the app left the old one installed,
+    /// loaded, and pointing at a bundle that no longer exists — invisible to a menu that only
+    /// knows the new name. Turning "Start at login" off therefore turned nothing off. It is
+    /// looked for everywhere the current one is.
+    static let formerLabel = "app.continuous.agent"
 
-    static var plistURL: URL {
+    static func plistURL(_ label: String) -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    }
+
+    static var plistURL: URL { plistURL(label) }
+    static var formerPlistURL: URL { plistURL(formerLabel) }
+
+    /// Every agent of ours that is installed, old name included.
+    static var installedLabels: [String] {
+        [label, formerLabel].filter { FileManager.default.fileExists(atPath: plistURL($0).path) }
     }
 
     static var logURL: URL {
@@ -163,12 +178,14 @@ enum LaunchAgent {
     }
 
     static var installedRole: RuntimeState.Role? {
-        guard let data = try? Data(contentsOf: plistURL),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
-                as? [String: Any],
-              let arguments = plist["ProgramArguments"] as? [String] else { return nil }
-        if arguments.contains("listen") { return .listening }
-        if arguments.contains("connect") { return .sharing }
+        for label in installedLabels {
+            guard let data = try? Data(contentsOf: plistURL(label)),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
+                    as? [String: Any],
+                  let arguments = plist["ProgramArguments"] as? [String] else { continue }
+            if arguments.contains("listen") { return .listening }
+            if arguments.contains("connect") { return .sharing }
+        }
         return nil
     }
 
@@ -204,9 +221,29 @@ enum LaunchAgent {
         return plistURL
     }
 
+    /// Removes every agent of ours and checks that it worked.
+    ///
+    /// Deliberately not `try?` on the part that matters. Removing the file silently failing is
+    /// how a switch comes to be off in the menu and on at login, which is worse than an error:
+    /// nothing in the interface disagrees with itself, so there is nothing to investigate.
     static func uninstall() throws {
-        try? stop()
-        try? FileManager.default.removeItem(at: plistURL)
+        for label in [self.label, formerLabel] {
+            _ = try? runLaunchctl(["bootout", "gui/\(getuid())/\(label)"])
+            let url = plistURL(label)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                throw EdgeError.invalidArgument("""
+                    could not remove \(url.path)
+                      \(error.localizedDescription)
+                      Delete that file and Edge will stop starting at login.
+                    """)
+            }
+        }
+        guard installedLabels.isEmpty else {
+            throw EdgeError.invalidArgument("the login item is still installed")
+        }
     }
 
     static func start() throws {
@@ -216,7 +253,20 @@ enum LaunchAgent {
     }
 
     static func stop() throws {
-        _ = try? runLaunchctl(["bootout", "gui/\(getuid())/\(label)"])
+        for label in [self.label, formerLabel] {
+            _ = try? runLaunchctl(["bootout", "gui/\(getuid())/\(label)"])
+        }
+    }
+
+    /// Clears out an agent left behind by the old name, whatever else is going on.
+    ///
+    /// Called at launch. It points at a bundle that no longer exists, so every login it fails,
+    /// launchd retries it, and the only trace is a log nobody reads.
+    static func removeFormerAgent() {
+        guard FileManager.default.fileExists(atPath: formerPlistURL.path) else { return }
+        _ = try? runLaunchctl(["bootout", "gui/\(getuid())/\(formerLabel)"])
+        try? FileManager.default.removeItem(at: formerPlistURL)
+        Log.info("removed the login item left behind by the old name")
     }
 
     @discardableResult

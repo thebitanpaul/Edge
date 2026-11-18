@@ -57,17 +57,41 @@ public struct PairingCode: Sendable {
 
         let characters = Array(cleaned)
         let lengths = [secretBytes, legacySecretBytes]
+        // Where each surviving character came from, so a window can be asked what surrounded
+        // it before the punctuation was dropped.
+        let origin = Array(input).enumerated()
+            .filter { CrockfordBase32.isCodeCharacter($0.element) }
+            .map(\.offset)
+        let source = Array(input)
 
-        // Letters from surrounding prose are themselves valid code characters — "code:" alone
-        // contributes four — so dropping the punctuation is not enough. Slide a window of each
-        // valid length and take the first that checksums. The checksum is what makes this
-        // safe: a run of ordinary words will not pass it.
-        for secretCount in lengths {
-            let total = bodyLength(forSecretBytes: secretCount) + 2
-            guard characters.count >= total else { continue }
-            for start in 0...(characters.count - total) {
-                let window = String(characters[start..<(start + total)])
-                if let code = decode(window, secretBytes: secretCount) { return code }
+        /// Did this window start and end at a real break in the text?
+        ///
+        /// A code is normally pasted surrounded by spaces, quotes or line ends, and letters
+        /// from the prose around it are themselves valid code characters — "code:" alone
+        /// contributes four. Sliding a window over all of them and taking the first that
+        /// checksums is right about 255 times in 256, and wrong the rest of the time: an
+        /// 8-bit checksum passed by chance returns a code nobody typed. Requiring the window
+        /// to sit between two breaks makes the overlapping near-misses impossible instead of
+        /// merely unlikely.
+        func isWholeWord(_ start: Int, _ end: Int) -> Bool {
+            func isBreak(_ index: Int) -> Bool {
+                guard index >= 0, index < source.count else { return true }
+                return !CrockfordBase32.isCodeCharacter(source[index]) && source[index] != "-"
+            }
+            return isBreak(origin[start] - 1) && isBreak(origin[end - 1] + 1)
+        }
+
+        // Whole words first, then anything that checksums — a code typed straight into a
+        // field with no surroundings at all has to keep working.
+        for wholeWordsOnly in [true, false] {
+            for secretCount in lengths {
+                let total = bodyLength(forSecretBytes: secretCount) + 2
+                guard characters.count >= total else { continue }
+                for start in 0...(characters.count - total) {
+                    if wholeWordsOnly, !isWholeWord(start, start + total) { continue }
+                    let window = String(characters[start..<(start + total)])
+                    if let code = decode(window, secretBytes: secretCount) { return code }
+                }
             }
         }
 
