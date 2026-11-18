@@ -92,7 +92,7 @@ no Dock icon, no window.
   ─────────────────────────────
   ☑ Share clipboard
   ☑ Start at login
-  ☑ Show in Menu Bar        (macOS 26+, once Edge Options is in Control Center)
+  ☑ Show in Menu Bar        (macOS 26+, once Edge is in Control Center)
   ─────────────────────────────
   Open log…
   Quit Edge
@@ -112,23 +112,21 @@ launch agent for running without the app.)
 
 ### Control Center (macOS 26 and later)
 
-Edge adds two controls. To add them, open Control Center, click **Edit Controls**, search for
-Edge, and drag in:
+Edge adds one switch to Control Center. Open Control Center, click **Edit Controls**, search
+for Edge, and add it. It is highlighted while Edge is on and shows the other Mac's name once
+connected.
 
-- **Edge**: shows On or Off (and which Mac it is connected to). Tapping it starts or stops
-  Edge.
-- **Edge Options** (›): opens Edge's full menu where you clicked, Quit included.
+- **On** opens Edge if it is not running and starts it.
+- **Off** quits Edge, the same as Quit in the menu. Nothing keeps running in the background,
+  and start at login is left as it was.
 
-Third-party controls cannot have a built-in "›" the way Wi-Fi does, so it is two tiles. Set
-Edge to medium size and Options to small, side by side, and together they look like the Wi-Fi
-tile.
+Once the switch is in Control Center, **Show in Menu Bar** in the menu can be unticked so Edge
+lives in Control Center only. Edge never lets itself become unreachable:
 
-Once **Edge Options** is in Control Center, **Show in Menu Bar** in the menu can be unticked
-and Edge lives in Control Center only. Edge never lets itself become unreachable:
-
-- the icon can only be hidden while Edge Options is in Control Center;
-- if Edge Options is removed later, the icon comes back by itself within a few seconds;
-- opening Edge again from Applications or Spotlight always brings the icon back.
+- the icon can only be hidden while the switch is in Control Center;
+- if the switch is removed later, the icon comes back by itself within a few seconds;
+- opening Edge from Applications or Spotlight always brings the icon back, and with it the
+  menu for everything else (pairing, arrangement, clipboard, start at login).
 
 `edge controls` checks each part of this setup and says what is missing.
 

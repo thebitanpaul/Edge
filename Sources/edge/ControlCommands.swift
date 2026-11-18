@@ -29,6 +29,18 @@ extension Commands {
         }
         ok("extension  \(appex.path)")
 
+        // Without this, Control Center shows the switch but a tap does nothing at all: it
+        // cannot turn the intent into an action ("action intent without linkAction").
+        let metadata = appex.appendingPathComponent(
+            "Contents/Resources/Metadata.appintents/extract.actionsdata")
+        if let data = try? Data(contentsOf: metadata),
+           let text = String(data: data, encoding: .utf8),
+           text.contains("EdgeControls.PowerIntent"), !text.contains("__MANGLED_TYPE_NAME__") {
+            ok("the switch's action is described to macOS")
+        } else {
+            bad("the switch's action metadata is missing — taps would do nothing; rebuild with Scripts/build.sh")
+        }
+
         let entitlements = shell("/usr/bin/codesign", ["-d", "--entitlements", "-", "--xml", appex.path])
         if entitlements.contains("com.apple.security.app-sandbox") {
             ok("extension is sandboxed, as macOS requires")
@@ -81,12 +93,14 @@ extension Commands {
             case .none:
                 warn("could not ask Control Center which controls are placed")
             case .some(let kinds):
-                let power = kinds.contains(ControlState.powerKind)
-                let options = kinds.contains(ControlState.optionsKind)
-                (power ? ok : info)("Edge control \(power ? "is" : "is not") in Control Center")
-                (options ? ok : info)("Edge Options control \(options ? "is" : "is not") in Control Center")
-                if !options {
-                    out(Style.dim("    The menu-bar icon can only be hidden once Edge Options is there."))
+                if args.has("verbose") {
+                    out(Style.dim("    placed: \(kinds.isEmpty ? "nothing" : kinds.sorted().joined(separator: ", "))"))
+                }
+                if kinds.contains(ControlState.powerKind) {
+                    ok("the Edge switch is in Control Center")
+                } else {
+                    info("the Edge switch is not in Control Center — Edit Controls, search for Edge")
+                    out(Style.dim("    The menu-bar icon can only be hidden once it is there."))
                 }
             }
         }

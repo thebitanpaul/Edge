@@ -145,8 +145,28 @@ PLIST
 # systems see the minimum version and leave it alone.
 CONTROLS_ID="$BUNDLE_ID.controls"
 APPEX="$APP/Contents/PlugIns/EdgeControls.appex"
-mkdir -p "$APPEX/Contents/MacOS"
+mkdir -p "$APPEX/Contents/MacOS" "$APPEX/Contents/Resources/Metadata.appintents"
 cp "$CONTROLS_BIN" "$APPEX/Contents/MacOS/EdgeControls"
+
+# What macOS needs to run a tap. Control Center turns the control's intent into an action by
+# looking it up in this file; with no entry the tap fails ("action intent without linkAction")
+# and the switch does nothing. Xcode generates it with a tool the Command Line Tools do not
+# include, so it is written here from Resources/ControlsMetadata.json — modelled on the Dock's
+# own auto-hide control — with the intent's mangled type name read out of the binary just
+# built, so a rename cannot leave it pointing at a type that no longer exists.
+INTENT_TYPE="$(nm "$CONTROLS_BIN" | sed -n 's/.* _\$s\(12EdgeControls[0-9]*PowerIntentV\)Mn$/\1/p')"
+if [ -z "$INTENT_TYPE" ]; then
+  echo "could not find EdgeControls.PowerIntent in $CONTROLS_BIN — was it renamed?" >&2
+  exit 1
+fi
+sed "s/__MANGLED_TYPE_NAME__/$INTENT_TYPE/g" "$ROOT/Resources/ControlsMetadata.json" \
+  > "$APPEX/Contents/Resources/Metadata.appintents/extract.actionsdata"
+cat > "$APPEX/Contents/Resources/Metadata.appintents/version.json" <<JSON
+{
+  "toolsVersion" : "27A225b",
+  "version" : "3.0"
+}
+JSON
 cat > "$APPEX/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -267,6 +287,9 @@ LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 # Launch Services hands the extension on to the plug-in registry in its own time, and after a
 # rebuild that sometimes means not at all until the app is next opened. Ask directly.
 pluginkit -a "$APPEX" >/dev/null 2>&1 || true
+# A controls process from the previous build keeps answering Control Center with the old code
+# until something stops it. macOS starts the new one the next time it is needed.
+pkill -x EdgeControls >/dev/null 2>&1 || true
 
 # A tiny launcher so `edge` on your PATH runs the *bundled* copy, keeping one code
 # identity and therefore one set of permission grants.

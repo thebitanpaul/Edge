@@ -1159,7 +1159,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// What a tap on one of the controls asked for.
+    /// What the Control Center switch asked for.
+    ///
+    /// On starts Edge. Off is Quit, not Stop: with the menu-bar icon hidden, Control Center
+    /// is all there is, and an Edge that merely stopped would carry on running with nothing
+    /// left to quit it from. Like Quit, it leaves start at login alone, so the next login
+    /// brings Edge back exactly as it would have.
     ///
     /// Deferred a turn, so that when the tap is what launched the app, everything `start()`
     /// queued — the permission check, the secondary readying itself — has happened first and
@@ -1168,28 +1173,23 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard url.scheme == ControlState.scheme else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            let paired = !(((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty)
             switch url.host {
             case "start":
+                let paired = !(((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty)
                 if !paired {
+                    // Nothing to start yet; the menu is where setting up begins.
                     self.showMenuAtPointer()
                 } else if !self.isRunning {
                     self.stoppedByHand = false
                     self.startSession()
                 }
+                self.refresh()
+                self.publishControlState()
             case "stop":
-                if self.isRunning {
-                    self.stoppedByHand = true
-                    self.autoStartWork?.cancel()
-                    self.stopSession()
-                }
-            case "options":
-                self.showMenuAtPointer()
+                self.quit()
             default:
                 Log.debug("ignored an unknown control link: \(url.absoluteString)")
             }
-            self.refresh()
-            self.publishControlState()
         }
     }
 
@@ -1198,6 +1198,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func showMenuAtPointer() {
         NSApp.activate(ignoringOtherApps: true)
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    /// Opened by hand while not running — from Finder, Spotlight or Launchpad, not at login
+    /// and not by the Control Center switch. Someone who opens an app expects to see it.
+    func launchedByHand() {
+        guard prefersHiddenIcon else { return }
+        prefersHiddenIcon = false
+        statusItem.isVisible = true
+        stopReachabilityChecks()
     }
 
     /// Opening Edge again while it is running, from Finder, Spotlight or Launchpad.
@@ -1215,8 +1224,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: Hiding the menu-bar icon
 
-    /// Never on its own: the icon is only hidden while Control Center can reach this same
-    /// menu. Otherwise Edge would be running with no way to see it, stop it or quit it.
+    /// Never on its own: the icon is only hidden while the Edge switch is in Control Center,
+    /// because that switch is how Edge is quit without it. Otherwise Edge would be running
+    /// with no way to see it, stop it or quit it.
     private var prefersHiddenIcon: Bool {
         get { UserDefaults.standard.bool(forKey: "hideMenuBarIcon") }
         set { UserDefaults.standard.set(newValue, forKey: "hideMenuBarIcon") }
@@ -1237,13 +1247,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// The Options control is what makes hiding safe: it opens this menu, Quit included.
-    /// The Edge control alone can start and stop, but leads nowhere else.
-    private static func canReachMenu(_ kinds: Set<String>?) -> Bool {
-        kinds?.contains(ControlState.optionsKind) == true
+    /// The switch is what makes hiding safe: turning it off quits Edge.
+    private static func canQuitFromControlCenter(_ kinds: Set<String>?) -> Bool {
+        kinds?.contains(ControlState.powerKind) == true
     }
 
-    /// Shows the icon unless it was hidden *and* Control Center can still reach the menu.
+    /// Shows the icon unless it was hidden *and* the switch is still in Control Center.
     ///
     /// Not knowing counts as "cannot reach": an icon shown that need not be costs a few
     /// pixels, an icon hidden that should not be costs the only way to quit.
@@ -1255,7 +1264,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         placedControls { [weak self] kinds in
             guard let self else { return }
-            if Self.canReachMenu(kinds) {
+            if Self.canQuitFromControlCenter(kinds) {
                 self.statusItem.isVisible = false
                 self.startReachabilityChecks()
             } else {
@@ -1264,7 +1273,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.prefersHiddenIcon = false
                 self.statusItem.isVisible = true
                 self.stopReachabilityChecks()
-                Log.info("Edge Options is no longer in Control Center — showing the menu-bar icon again")
+                Log.info("Edge is no longer in Control Center — showing the menu-bar icon again")
             }
         }
     }
@@ -1292,28 +1301,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         placedControls { [weak self] kinds in
             guard let self else { return }
-            guard Self.canReachMenu(kinds) else {
-                let hasPower = kinds?.contains(ControlState.powerKind) == true
-                self.notify(hasPower ? "Add Edge Options as well"
-                                     : "Add Edge to Control Center first",
-                            (hasPower
-                             ? "The Edge control starts and stops, but Edge Options is what opens "
-                               + "this menu — and Quit — once the icon is gone.\n\n"
-                             : "Without the icon, Control Center is the way back to this menu, so "
-                               + "the icon stays until Edge is there.\n\n")
+            guard Self.canQuitFromControlCenter(kinds) else {
+                self.notify("Add Edge to Control Center first",
+                            "Without the icon, the Edge switch in Control Center is how Edge is "
+                            + "turned on and quit, so the icon stays until the switch is there.\n\n"
                             + "Open Control Center, click Edit Controls at the bottom, search for "
-                            + "Edge, and add Edge Options. For a tile like Wi-Fi's, add Edge too: "
-                            + "Edge at medium size with Options small beside it.")
+                            + "Edge, and add it.")
                 return
             }
             self.prefersHiddenIcon = true
             self.statusItem.isVisible = false
             self.startReachabilityChecks()
             self.notify("Edge is in Control Center now",
-                        "Use Edge Options there for this menu. To bring the icon back, tick Show "
-                        + "in Menu Bar from there, or open Edge again from Applications.\n\n"
-                        + "If Edge Options is ever removed from Control Center, the icon comes "
-                        + "back on its own.")
+                        "Turn it on there, or off to quit it. For this menu, open Edge again "
+                        + "from Applications or Spotlight — that also brings the icon back.\n\n"
+                        + "If Edge is ever removed from Control Center, the icon comes back on "
+                        + "its own.")
         }
     }
 
@@ -1468,7 +1471,19 @@ final class MenuBarAppDelegate: NSObject, NSApplicationDelegate {
         self.controller = controller
     }
 
-    /// A tap on one of the Control Center controls — including the one that launched the app.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // The event that launched us says how: the Control Center switch sends a link instead
+        // of an open-application event, and a login item marks its open-application event as
+        // such. Anything else is someone opening Edge on purpose.
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventClass == AEEventClass(kCoreEventClass),
+              event.eventID == AEEventID(kAEOpenApplication) else { return }
+        let loginItem = event.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?
+            .enumCodeValue == OSType(keyAELaunchedAsLogInItem)
+        if !loginItem { controller.launchedByHand() }
+    }
+
+    /// A tap on the Control Center switch — including the one that launched the app.
     func application(_ application: NSApplication, open urls: [URL]) {
         urls.forEach(controller.handleControlURL)
     }

@@ -32,16 +32,14 @@ struct ControlStateTests {
         #expect(state(connected: true).isOn)
     }
 
-    @Test("a tap says which way to go, so a late or repeated one is harmless")
-    func tapURLs() {
-        #expect(state(running: false).tapURL == ControlState.startURL)
-        #expect(state().tapURL == ControlState.stopURL)
-        #expect(state(connected: true).tapURL == ControlState.stopURL)
-        // Nothing to start yet: open the menu, which offers Set up.
-        #expect(state(paired: false).tapURL == ControlState.optionsURL)
-        for url in [ControlState.startURL, ControlState.stopURL, ControlState.optionsURL] {
+    @Test("the switch says which way to go, so a late or repeated tap is harmless")
+    func links() {
+        #expect(ControlState.startURL != ControlState.stopURL)
+        for url in [ControlState.startURL, ControlState.stopURL] {
             #expect(url.scheme == ControlState.scheme)
         }
+        #expect(ControlState.startURL.host == "start")
+        #expect(ControlState.stopURL.host == "stop")
     }
 
     @Test("the peer is named only while connected")
@@ -67,11 +65,25 @@ struct ControlStateTests {
         #expect(!ControlState.fileURL.path.contains("/Containers/"))
     }
 
-    @Test("control kinds and the extension share the app's bundle id prefix")
+    @Test("the control kind and the extension share the app's bundle id prefix")
     func identifiers() {
         #expect(ControlState.extensionBundleID.hasPrefix("app.edge.cli."))
         #expect(ControlState.powerKind.hasPrefix(ControlState.extensionBundleID))
-        #expect(ControlState.optionsKind.hasPrefix(ControlState.extensionBundleID))
-        #expect(ControlState.powerKind != ControlState.optionsKind)
+    }
+
+    @Test("the action metadata template matches the intent it describes")
+    func metadataTemplate() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/ControlsMetadata.json")
+        let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                                as? [String: Any])
+        let actions = try #require(root["actions"] as? [String: Any])
+        let power = try #require(actions["PowerIntent"] as? [String: Any])
+        #expect(power["fullyQualifiedTypeName"] as? String == "EdgeControls.PowerIntent")
+        #expect(power["mangledTypeName"] as? String == "__MANGLED_TYPE_NAME__")
+        #expect((power["systemProtocols"] as? [String]) == ["com.apple.link.systemProtocol.SetValue"])
+        let parameters = try #require(power["parameters"] as? [[String: Any]])
+        #expect(parameters.map { $0["name"] as? String } == ["value"])
     }
 }

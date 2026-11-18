@@ -8,9 +8,8 @@ import Foundation
 /// - **App → control:** the app writes this small file whenever what the control should show
 ///   changes, then asks WidgetKit to reload. The extension is allowed to read exactly this one
 ///   directory and nothing else.
-/// - **Control → app:** each control is a button that opens an `edge-control://` link. That is
-///   a system intent, so it needs none of the App Intents metadata only Xcode can generate,
-///   and Launch Services delivers it to the running app — or starts the app first.
+/// - **Control → app:** the switch's intent opens an `edge-control://` link, which Launch
+///   Services delivers to the running app — or starts the app first.
 ///
 /// This module is shared by both sides so they cannot drift apart on the format.
 public struct ControlState: Codable, Equatable, Sendable {
@@ -67,29 +66,17 @@ public struct ControlState: Codable, Equatable, Sendable {
         }
     }
 
-    /// What tapping the control should do *given what it was showing*.
-    ///
-    /// Start and stop rather than "toggle": a tap that starts the app from cold races with the
-    /// secondary starting itself, and a toggle that arrives second turns it straight back off.
-    /// Saying which way to go makes a repeated or late tap harmless.
-    public var tapURL: URL {
-        switch phase {
-        case .notSetUp:  return Self.optionsURL
-        case .stopped:   return Self.startURL
-        default:         return Self.stopURL
-        }
-    }
-
     // MARK: - Shared constants
 
+    /// Start and quit rather than "toggle": a tap that starts the app from cold races with the
+    /// secondary starting itself, and a toggle that arrived second would turn it straight back
+    /// off. Saying which way to go makes a repeated or late tap harmless.
     public static let scheme = "edge-control"
     public static let startURL = URL(string: "edge-control://start")!
     public static let stopURL = URL(string: "edge-control://stop")!
-    public static let optionsURL = URL(string: "edge-control://options")!
 
     public static let extensionBundleID = "app.edge.cli.controls"
     public static let powerKind = "app.edge.cli.controls.power"
-    public static let optionsKind = "app.edge.cli.controls.options"
 
     // MARK: - The file
 
