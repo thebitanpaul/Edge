@@ -27,6 +27,13 @@ public enum NetworkPairing {
         public let peerName: String
         /// The digits the person compared.
         public let verification: String
+        /// The other Mac's screens as it described them while pairing, or nil when it is
+        /// running a build that does not say.
+        ///
+        /// Pairing is the first moment the two Macs talk, and the very next step is arranging
+        /// their screens — so without this the arrangement could only guess at the far side,
+        /// and a guess drawn from *this* Mac's screens shows a laptop as a pair of monitors.
+        public let peerDisplays: [Display]?
     }
 
     public enum Failure: LocalizedError {
@@ -82,16 +89,29 @@ public enum NetworkPairing {
     enum Tag: UInt8 { case hello = 1, confirm = 2, reject = 3 }
     static let version: UInt8 = 1
 
-    static func encodeHello(publicKey: Curve25519.KeyAgreement.PublicKey, name: String) -> Data {
-        var w = BinaryWriter(capacity: 96)
+    /// More screens than this is not a desk, it is a malformed message.
+    static let maxDisplays = 16
+
+    /// The screen list rides at the end, after everything an older build reads. An older
+    /// build stops at the name and never looks further, so this needs no version bump —
+    /// and a version bump here would refuse to pair two Macs over a detail of drawing.
+    static func encodeHello(publicKey: Curve25519.KeyAgreement.PublicKey, name: String,
+                            displays: [Display] = []) -> Data {
+        var w = BinaryWriter(capacity: 96 + displays.count * 17)
         w.u8(version)
         w.u8(Tag.hello.rawValue)
         w.blob(publicKey.rawRepresentation)
         w.string(name)
+        let shown = displays.prefix(maxDisplays)
+        w.u8(UInt8(shown.count))
+        for d in shown {
+            w.i32(d.x); w.i32(d.y); w.i32(d.width); w.i32(d.height); w.bool(d.isMain)
+        }
         return w.data
     }
 
-    static func decodeHello(_ data: Data) throws -> (Curve25519.KeyAgreement.PublicKey, String) {
+    static func decodeHello(_ data: Data) throws
+        -> (key: Curve25519.KeyAgreement.PublicKey, name: String, displays: [Display]?) {
         var r = BinaryReader(data)
         guard let v = try? r.u8(), v == version else {
             throw Failure.protocolError("the other Mac is running a different version")
@@ -104,7 +124,23 @@ public enum NetworkPairing {
             throw Failure.protocolError("malformed key")
         }
         let name = (try? r.string()) ?? "the other Mac"
-        return (key, name)
+        return (key, name, decodeDisplays(&r))
+    }
+
+    /// Nil, not empty, for anything short of a complete, plausible list: "this Mac did not
+    /// say" must stay distinguishable from "this Mac has no screens", because only the
+    /// first is a reason to fall back to a guess.
+    private static func decodeDisplays(_ r: inout BinaryReader) -> [Display]? {
+        guard let n = try? r.u8(), n > 0, Int(n) <= maxDisplays else { return nil }
+        var displays: [Display] = []
+        for _ in 0..<n {
+            guard let x = try? r.i32(), let y = try? r.i32(),
+                  let width = try? r.i32(), let height = try? r.i32(),
+                  let isMain = try? r.bool(),
+                  width > 0, height > 0 else { return nil }
+            displays.append(Display(x: x, y: y, width: width, height: height, isMain: isMain))
+        }
+        return displays
     }
 
     static func encode(_ tag: Tag) -> Data {
@@ -140,7 +176,8 @@ public final class NetworkPairingSession {
     private var finished = false
 
     /// Set once both sides have shown the number; call `confirm(_:)` to answer.
-    private var pending: (secret: SharedSecret, digits: String, peer: String)?
+    private var pending: (secret: SharedSecret, digits: String, peer: String,
+                          displays: [Display]?)?
     private var localConfirmed = false
     private var peerConfirmed = false
 
@@ -358,7 +395,8 @@ public final class NetworkPairingSession {
 
     private func sendHello() {
         send(NetworkPairing.encodeHello(publicKey: privateKey.publicKey,
-                                        name: identity.deviceName))
+                                        name: identity.deviceName,
+                                        displays: Displays.current()))
     }
 
     private func send(_ data: Data) {
@@ -392,10 +430,10 @@ public final class NetworkPairingSession {
         case .hello:
             guard pending == nil else { return }
             do {
-                let (peerKey, peerName) = try NetworkPairing.decodeHello(data)
+                let (peerKey, peerName, peerDisplays) = try NetworkPairing.decodeHello(data)
                 let secret = try privateKey.sharedSecretFromKeyAgreement(with: peerKey)
                 let digits = NetworkPairing.verificationDigits(privateKey.publicKey, peerKey)
-                pending = (secret, digits, peerName)
+                pending = (secret, digits, peerName, peerDisplays)
                 report(.found(peerName))
                 report(.verify(digits: digits, peer: peerName))
             } catch {
@@ -415,7 +453,8 @@ public final class NetworkPairingSession {
         finished = true
         let outcome = NetworkPairing.Outcome(psk: NetworkPairing.derivePSK(from: pending.secret),
                                              peerName: pending.peer,
-                                             verification: pending.digits)
+                                             verification: pending.digits,
+                                             peerDisplays: pending.displays)
         // Let the other side's confirmation drain before dropping the connection.
         queue.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.teardown() }
         report(.done(outcome))

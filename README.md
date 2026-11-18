@@ -92,6 +92,7 @@ no Dock icon, no window.
   ─────────────────────────────
   ☑ Share clipboard
   ☑ Start at login
+  ☑ Show in Menu Bar        (macOS 26+, once Edge Options is in Control Center)
   ─────────────────────────────
   Open log…
   Quit Edge
@@ -101,6 +102,35 @@ The icon blinks while it is looking for the other Mac, and settles once connecte
 forgetting a Mac and changing the arrangement are all in the menu, so the terminal is optional
 rather than required. Changing the arrangement or the clipboard setting restarts the
 session, because both are read when one starts.
+
+**Start at login** adds Edge.app under *System Settings ▸ General ▸ Login Items ▸ Open at
+Login*, and the tick always reads what that list says — remove Edge there and the menu
+un-ticks too. Unticking removes it; if macOS ever refuses, Edge opens that page so you can
+select Edge and click **−**. At login a primary that was left running starts again, and a
+secondary makes itself ready as usual. (`edge service install` is the separate, headless
+launch agent for running without the app.)
+
+### Control Center (macOS 26 and later)
+
+Edge adds two controls. To add them, open Control Center, click **Edit Controls**, search for
+Edge, and drag in:
+
+- **Edge**: shows On or Off (and which Mac it is connected to). Tapping it starts or stops
+  Edge.
+- **Edge Options** (›): opens Edge's full menu where you clicked, Quit included.
+
+Third-party controls cannot have a built-in "›" the way Wi-Fi does, so it is two tiles. Set
+Edge to medium size and Options to small, side by side, and together they look like the Wi-Fi
+tile.
+
+Once **Edge Options** is in Control Center, **Show in Menu Bar** in the menu can be unticked
+and Edge lives in Control Center only. Edge never lets itself become unreachable:
+
+- the icon can only be hidden while Edge Options is in Control Center;
+- if Edge Options is removed later, the icon comes back by itself within a few seconds;
+- opening Edge again from Applications or Spotlight always brings the icon back.
+
+`edge controls` checks each part of this setup and says what is missing.
 
 ### Pairing
 
@@ -288,6 +318,7 @@ blocks peer-to-peer traffic.
 | `edge permissions` | what is granted, and how to grant the rest |
 | `edge capture-test` | can this Mac capture input? |
 | `edge status` | what is running, and which Mac has the pointer |
+| `edge controls` | check the Control Center controls are installed and placed |
 | `edge service install <ROLE>` | start at login as `listen` or `connect` |
 | `edge service start` / `stop` / `uninstall` | control the login item |
 | `edge config show` / `set` | settings |

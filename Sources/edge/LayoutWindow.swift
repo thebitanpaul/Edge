@@ -219,12 +219,13 @@ final class ArrangementWindowController: NSWindowController {
 
         let known = store.pairings.first { $0.peerDisplays?.isEmpty == false }
         let pairing = known ?? store.pairings.first
-        // Before the two Macs have ever spoken there is nothing to draw for the far side, so
-        // stand this Mac's own screens in for it and draw them dashed. The alternative —
-        // refusing to show anything until they have connected — meant the one moment you most
-        // want to say where the other Mac sits is the one moment you cannot.
+        // Pairing now carries each Mac's screens, so normally the far side is known before
+        // this window first opens. When it is not — the other Mac runs an older build — draw
+        // a single dashed screen. Not this Mac's own arrangement: that was the earlier guess,
+        // and with two monitors here it drew a one-screen laptop over there as two. One
+        // screen is what nearly every Mac has, and the dashes say it is a stand-in.
         let local = Displays.current()
-        let remote = known?.peerDisplays ?? local
+        let remote = known?.peerDisplays ?? Self.standInScreen(for: local)
         view.isPlaceholder = known == nil
         view.remoteName = pairing?.peerName ?? pairing?.label ?? "The other Mac"
         view.layout = ScreenLayout(localDisplays: local, remoteDisplays: remote,
@@ -233,11 +234,18 @@ final class ArrangementWindowController: NSWindowController {
         if view.layout == nil {
             note.stringValue = "No displays to arrange."
         } else if known == nil {
-            note.stringValue = "Its screens are a guess until the two Macs connect"
+            note.stringValue = "Its screen is a stand-in until the two Macs connect"
         } else {
             note.stringValue = "\(local.count) screen(s) here, \(remote.count) there"
         }
         view.needsDisplay = true
+    }
+
+    /// One screen the size of this Mac's main one, for a Mac whose screens are not known yet.
+    private static func standInScreen(for local: [Display]) -> [Display] {
+        let main = local.first(where: \.isMain) ?? local.first
+        return [Display(x: 0, y: 0, width: main?.width ?? 1512, height: main?.height ?? 982,
+                        isMain: true)]
     }
 
     func present() {

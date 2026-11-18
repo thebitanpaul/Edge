@@ -40,6 +40,7 @@ let usage = """
   menubar                 Run the menu-bar front end (also what double-clicking does)
   status                  What is running right now, and where the pointer is
   troubleshoot            Work out why the two Macs are not talking
+  controls                Check Edge's Control Center controls are set up
   service install <ROLE>  Start at login as `listen` or `connect`
   service start|stop      Control the login item
   service uninstall       Remove it
@@ -197,6 +198,7 @@ do {
     case "troubleshoot", "why":
                         try Commands.troubleshoot(args)
     case "service":     try Commands.service(args)
+    case "controls":    try Commands.controls(args)
     case "layout":      try Commands.layout(args)
     case "inject-test", "selftest-inject":
                         try Commands.injectTest(args)

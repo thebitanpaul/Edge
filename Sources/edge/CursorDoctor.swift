@@ -46,7 +46,7 @@ extension Commands {
         warn("move the mouse in small circles for 3 seconds…")
         var baselineCG = Set<String>()
         var baselineNS = Set<String>()
-        var deadline = Date().addingTimeInterval(3)
+        let deadline = Date().addingTimeInterval(3)
         while Date() < deadline {
             baselineCG.insert("\(LocalPointer.location)")
             baselineNS.insert("\(appKitLocation())")

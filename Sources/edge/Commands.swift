@@ -200,6 +200,7 @@ enum Commands {
         store.pairings.removeAll { $0.peerName == outcome.peerName || !$0.isBound }
         var pairing = Pairing(psk: outcome.psk, label: outcome.peerName)
         pairing.peerName = outcome.peerName
+        pairing.peerDisplays = outcome.peerDisplays
         store.pairings.append(pairing)
         try store.save()
 

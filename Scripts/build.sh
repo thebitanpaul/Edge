@@ -60,9 +60,18 @@ for STALE in "$ROOT"/build/*; do
 done
 
 echo "==> Building ($CONFIG)"
-swift build -c "$CONFIG"
-BIN="$(swift build -c "$CONFIG" --show-bin-path)/edge"
+# Without Xcode, the default build system hands the linker two Xcode-only search paths that the
+# Command Line Tools do not have, and ld warns about each on every link. They are harmless and
+# nothing in this package can change them, so exactly those lines are dropped; every other
+# warning still shows. sed rather than grep -v: it succeeds on empty output, and pipefail
+# still reports a failed build.
+swift build -c "$CONFIG" 2>&1 \
+  | sed -E "/ld: warning: search path '[^']*CommandLineTools\/Developer\/[^']*' not found/d"
+BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
+BIN="$BIN_DIR/edge"
+CONTROLS_BIN="$BIN_DIR/EdgeControls"
 test -x "$BIN" || { echo "build produced no binary at $BIN" >&2; exit 1; }
+test -x "$CONTROLS_BIN" || { echo "build produced no binary at $CONTROLS_BIN" >&2; exit 1; }
 
 VERSION="$("$BIN" --version | awk '{print $2}')"
 # Stamped into the bundle so `edge --version` can say exactly which commit is running.
@@ -71,6 +80,11 @@ VERSION="$("$BIN" --version | awk '{print $2}')"
 COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if ! git -C "$ROOT" diff --quiet 2>/dev/null; then COMMIT="$COMMIT+local"; fi
 BUILT_AT="$(date -u '+%Y-%m-%d %H:%M UTC')"
+# A build number that only ever goes up. Control Center caches what an extension offered under
+# its bundle version, so a rebuilt extension with an unchanged version can go on being shown —
+# or not shown — as the previous build was. CFBundleVersion only; the version people read
+# stays the marketing one.
+BUILD_NUMBER="$(date -u '+%Y%m%d%H%M%S')"
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
@@ -95,7 +109,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>               <string>Edge</string>
     <key>CFBundlePackageType</key>            <string>APPL</string>
     <key>CFBundleShortVersionString</key>     <string>$VERSION</string>
-    <key>CFBundleVersion</key>                <string>$VERSION</string>
+    <key>CFBundleVersion</key>                <string>$BUILD_NUMBER</string>
     <key>EdgeCommit</key>               <string>$COMMIT</string>
     <key>EdgeBuiltAt</key>              <string>$BUILT_AT</string>
     <key>LSMinimumSystemVersion</key>         <string>13.0</string>
@@ -114,6 +128,58 @@ cat > "$APP/Contents/Info.plist" <<PLIST
             <string>_edge._tcp</string>
             <string>_edge-pair._tcp</string>
         </array>
+    <!-- How the Control Center controls reach the app: each one opens an edge-control:// link. -->
+    <key>CFBundleURLTypes</key>
+        <array>
+            <dict>
+                <key>CFBundleURLName</key>    <string>$BUNDLE_ID.control</string>
+                <key>CFBundleURLSchemes</key> <array><string>edge-control</string></array>
+            </dict>
+        </array>
+</dict>
+</plist>
+PLIST
+
+# The Control Center controls: a WidgetKit extension, which macOS loads from PlugIns/.
+# Its bundle id has to start with the app's, and it only exists from macOS 26 — earlier
+# systems see the minimum version and leave it alone.
+CONTROLS_ID="$BUNDLE_ID.controls"
+APPEX="$APP/Contents/PlugIns/EdgeControls.appex"
+mkdir -p "$APPEX/Contents/MacOS"
+cp "$CONTROLS_BIN" "$APPEX/Contents/MacOS/EdgeControls"
+cat > "$APPEX/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>                   <string>Edge Controls</string>
+    <key>CFBundleDisplayName</key>            <string>Edge</string>
+    <key>CFBundleIdentifier</key>             <string>$CONTROLS_ID</string>
+    <key>CFBundleExecutable</key>             <string>EdgeControls</string>
+    <key>CFBundlePackageType</key>            <string>XPC!</string>
+    <key>CFBundleShortVersionString</key>     <string>$VERSION</string>
+    <key>CFBundleVersion</key>                <string>$BUILD_NUMBER</string>
+    <key>LSMinimumSystemVersion</key>         <string>26.0</string>
+    <key>NSExtension</key>
+        <dict>
+            <key>NSExtensionPointIdentifier</key> <string>com.apple.widgetkit-extension</string>
+        </dict>
+</dict>
+</plist>
+PLIST
+
+# macOS only loads a sandboxed extension. The one exception lets it read the single file the
+# app writes for it (see ControlState.swift) — read-only, and nothing else in your home folder.
+ENTITLEMENTS_DIR="$(mktemp -d -t edge-controls)"
+CONTROLS_ENTITLEMENTS="$ENTITLEMENTS_DIR/controls.entitlements"
+cat > "$CONTROLS_ENTITLEMENTS" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key> <true/>
+    <key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+        <array><string>/Library/Application Support/Edge/</string></array>
 </dict>
 </plist>
 PLIST
@@ -128,6 +194,16 @@ PLIST
 # like a brand new app and Accessibility and Input Monitoring have to be granted again. A
 # self-signed certificate gives the bundle a stable identity instead, and the grants stick.
 # Scripts/create-signing-identity.sh makes one; this picks it up automatically if it exists.
+# Inside out: the extension first, then the app, whose signature seals the extension's in.
+sign_all() {
+  local identity="$1"
+  codesign --force --sign "$identity" --identifier "$CONTROLS_ID" \
+           --entitlements "$CONTROLS_ENTITLEMENTS" \
+           --options runtime --timestamp=none "$APPEX" &&
+  codesign --force --sign "$identity" --identifier "$BUNDLE_ID" \
+           --options runtime --timestamp=none "$APP"
+}
+
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
   echo "==> Signing as \"$SIGNING_IDENTITY\" (stable identity — permissions survive rebuilds)"
   if [ "$SIGNING_IDENTITY" != "Edge Local Signing" ]; then
@@ -139,8 +215,8 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
   # The first signature with a new key makes the keychain put up a dialog, and codesign then
   # waits for it indefinitely. A build that hangs with no explanation is worse than one that
   # falls back, so give it a deadline and say what to do.
-  codesign --force --sign "$SIGNING_IDENTITY" --identifier "$BUNDLE_ID" \
-           --options runtime --timestamp=none "$APP" >/tmp/edge-codesign.log 2>&1 &
+  CODESIGN_LOG="$(mktemp -t edge-codesign)"
+  sign_all "$SIGNING_IDENTITY" >"$CODESIGN_LOG" 2>&1 &
   CODESIGN_PID=$!
   WAITED=0
   while kill -0 "$CODESIGN_PID" 2>/dev/null && [ "$WAITED" -lt 20 ]; do
@@ -164,14 +240,14 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
     echo "    Or drop the identity entirely:"
     echo "        security delete-certificate -c \"$SIGNING_IDENTITY\""
     echo
-    codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
+    sign_all - 2>&1 | sed 's/^/    /'
   else
-    sed 's/^/    /' /tmp/edge-codesign.log
+    sed 's/^/    /' "$CODESIGN_LOG"
   fi
-  rm -f /tmp/edge-codesign.log
+  rm -f "$CODESIGN_LOG"
 else
   echo "==> Signing (ad-hoc)"
-  codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
+  sign_all - 2>&1 | sed 's/^/    /'
   echo
   echo "    ⚠ No stable signing identity on this Mac."
   echo "      An ad-hoc signature identifies the app by the hash of its contents, so every"
@@ -181,7 +257,16 @@ else
   echo "          Scripts/create-signing-identity.sh"
   echo
 fi
-codesign --verify --verbose=1 "$APP" 2>&1 | sed 's/^/    /'
+rm -rf "$ENTITLEMENTS_DIR"
+codesign --verify --strict --verbose=1 "$APP" 2>&1 | sed 's/^/    /'
+
+# Tell Launch Services about this copy now, so the controls show up in Control Center's
+# gallery and edge-control:// links reach it, without first having to open the app by hand.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+[ -x "$LSREGISTER" ] && "$LSREGISTER" -f "$APP" >/dev/null 2>&1 || true
+# Launch Services hands the extension on to the plug-in registry in its own time, and after a
+# rebuild that sometimes means not at all until the app is next opened. Ask directly.
+pluginkit -a "$APPEX" >/dev/null 2>&1 || true
 
 # A tiny launcher so `edge` on your PATH runs the *bundled* copy, keeping one code
 # identity and therefore one set of permission grants.

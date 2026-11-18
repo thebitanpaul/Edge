@@ -246,6 +246,21 @@ enum LaunchAgent {
         }
     }
 
+    /// Deletes the plists, leaving anything they already started running.
+    ///
+    /// For when the question is only what happens at the *next* login. launchd reads this
+    /// directory when a session begins, so with the files gone nothing of ours is loaded then.
+    static func removePlists() {
+        for url in [plistURL, formerPlistURL]
+        where FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                Log.warn("could not remove \(url.path): \(error.localizedDescription)")
+            }
+        }
+    }
+
     static func start() throws {
         // bootstrap/kickstart is the modern spelling; load is the one that works everywhere.
         _ = try runLaunchctl(["bootstrap", "gui/\(getuid())", plistURL.path])

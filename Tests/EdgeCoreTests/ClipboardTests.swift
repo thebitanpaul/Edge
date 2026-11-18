@@ -361,9 +361,42 @@ struct NetworkPairingTests {
     func helloRoundTrip() throws {
         let key = Curve25519.KeyAgreement.PrivateKey().publicKey
         let encoded = NetworkPairing.encodeHello(publicKey: key, name: "Bitan's MacBook Air")
-        let (decodedKey, name) = try NetworkPairing.decodeHello(encoded)
+        let (decodedKey, name, _) = try NetworkPairing.decodeHello(encoded)
         #expect(decodedKey.rawRepresentation == key.rawRepresentation)
         #expect(name == "Bitan's MacBook Air")
+    }
+
+    @Test("a hello carries the screens, so setup can draw the other Mac as it is")
+    func helloCarriesDisplays() throws {
+        let key = Curve25519.KeyAgreement.PrivateKey().publicKey
+        let laptop = [Display(x: 0, y: 0, width: 1512, height: 982, isMain: true)]
+        let encoded = NetworkPairing.encodeHello(publicKey: key, name: "Air", displays: laptop)
+        let (_, name, displays) = try NetworkPairing.decodeHello(encoded)
+        #expect(name == "Air")
+        #expect(displays == laptop)
+    }
+
+    @Test("a hello from an older build, with no screens, still pairs")
+    func olderHelloHasNoDisplays() throws {
+        let key = Curve25519.KeyAgreement.PrivateKey().publicKey
+        var w = BinaryWriter(capacity: 64)
+        w.u8(1); w.u8(1)
+        w.blob(key.rawRepresentation)
+        w.string("Old Mac")
+        let (_, name, displays) = try NetworkPairing.decodeHello(w.data)
+        #expect(name == "Old Mac")
+        // Unknown, not "no screens": only unknown is a reason to fall back to a guess.
+        #expect(displays == nil)
+    }
+
+    @Test("a truncated screen list is ignored rather than half-read")
+    func truncatedDisplaysAreIgnored() throws {
+        let key = Curve25519.KeyAgreement.PrivateKey().publicKey
+        let two = [Display(x: 0, y: 0, width: 1512, height: 982, isMain: true),
+                   Display(x: 1512, y: 0, width: 2560, height: 1440, isMain: false)]
+        let encoded = NetworkPairing.encodeHello(publicKey: key, name: "Air", displays: two)
+        let (_, _, displays) = try NetworkPairing.decodeHello(encoded.dropLast(3))
+        #expect(displays == nil)
     }
 
     @Test("a malformed hello is refused, not guessed at")

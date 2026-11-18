@@ -79,7 +79,8 @@ public final class EventTap {
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                 Log.warn("event tap was disabled by the system (\(type == .tapDisabledByTimeout ? "timeout" : "user input")) — re-enabling")
                 tap.setEnabled(true)
-                tap.handler(type, event)
+                // Told, so it can resync; what it returns is moot, the event passes regardless.
+                _ = tap.handler(type, event)
                 return Unmanaged.passUnretained(event)
             }
 

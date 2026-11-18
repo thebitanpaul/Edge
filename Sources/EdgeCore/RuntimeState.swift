@@ -63,7 +63,7 @@ public struct RuntimeState: Codable, Sendable {
         var copy = self
         copy.updatedAt = Date()
         guard let data = try? JSONEncoder.edgeJSON.encode(copy) else { return }
-        try? Paths.ensureSupportDirectory()
+        _ = try? Paths.ensureSupportDirectory()
         try? AtomicFile.write(data, to: Self.url(for: role), mode: 0o600)
     }
 

@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
+import EdgeControlState
 import EdgeCore
+import WidgetKit
 
 /// A menu-bar front end, so this does not have to live in a terminal window.
 ///
@@ -53,6 +55,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// to another process, so it is not worth doing twice a second.
     private var permissionsWereGranted = true
     private var lastPermissionCheck = Date.distantPast
+    /// What the Control Center control was last told to show, so it is only reloaded on change.
+    private var lastPublishedControl: ControlState?
+    /// Runs while the menu-bar icon is hidden, to bring it back if Control Center loses Edge.
+    private var reachabilityTimer: Timer?
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
 
@@ -93,12 +99,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Before anything reads it: an agent under the old name starts a bundle that no
         // longer exists, every login, with nothing in the interface to say so.
         LaunchAgent.removeFormerAgent()
+        LoginItem.migrateFromLaunchAgent()
+        applyMenuBarVisibility()
         permissionsWereGranted = missingPermissions.isEmpty
         // Anyone who already has a pairing has been through this; the flag is new, they are not.
         if !setupCompleted, !(((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty) {
             setupCompleted = true
         }
         refresh()
+        // A control left showing "On" by a crash is corrected the moment the app is back.
+        publishControlState()
 
         // Asked for at launch rather than at the first attempt to use them. Being told what
         // an app needs before it needs it is the difference between a decision and an
@@ -108,7 +118,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // there spins a modal loop inside a loop that has not started yet.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if self.ensurePermissions() { self.autoStartIfSecondary() }
+            if self.ensurePermissions() {
+                self.autoStartIfSecondary()
+                self.autoStartIfStartingAtLogin()
+            }
         }
     }
 
@@ -208,6 +221,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         startSession()
     }
 
+    /// The primary picks up where it was, when Edge is set to start at login.
+    ///
+    /// Start at login used to start the session itself, headless; now it opens the app, and an
+    /// app that opened at login and then sat there stopped would be the switch quietly doing
+    /// less than it did. A Stop pressed by hand is still honoured, so this only ever resumes a
+    /// primary that was left running.
+    private func autoStartIfStartingAtLogin() {
+        guard mode == .host, LoginItem.isEnabled, setupCompleted,
+              !stoppedByHand, !isRunning else { return }
+        guard !((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty else { return }
+        startSession()
+    }
+
     /// Tries again shortly. Used when the listener exits on its own — a managed Mac going to
     /// sleep, say — so it comes back without anyone walking over to it.
     private func scheduleAutoStart(after delay: TimeInterval) {
@@ -280,6 +306,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if signature != lastIconSignature {
             lastIconSignature = signature
             redrawIcon()
+            publishControlState()
         }
         // The menu is rebuilt when it opens; rebuilding it while closed is invisible work.
     }
@@ -433,9 +460,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         files.state = config.fileSharing ? .on : .off
         menu.addItem(files)
 
-        let login = action("Start at login", #selector(toggleLoginItem))
-        login.state = LaunchAgent.installedRole != nil ? .on : .off
+        // Read from the system every time the menu is built, not remembered: removing Edge
+        // under Login Items in System Settings has to un-tick this too.
+        let needsApproval = LoginItem.needsApproval
+        let login = action(needsApproval ? "Start at login — switched off in System Settings"
+                                         : "Start at login",
+                           #selector(toggleLoginItem))
+        login.state = LoginItem.isEnabled ? .on : (needsApproval ? .mixed : .off)
         menu.addItem(login)
+
+        if controlsAvailable {
+            let icon = action("Show in Menu Bar", #selector(toggleMenuBarIcon))
+            icon.state = statusItem.isVisible ? .on : .off
+            menu.addItem(icon)
+        }
 
         menu.addItem(.separator())
         menu.addItem(action("Reconfigure", #selector(runSetup)))
@@ -864,6 +902,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             store.pairings.removeAll { $0.peerName == outcome.peerName || !$0.isBound }
             var pairing = Pairing(psk: outcome.psk, label: outcome.peerName)
             pairing.peerName = outcome.peerName
+            pairing.peerDisplays = outcome.peerDisplays
             store.pairings.append(pairing)
             try store.save()
             restartForPairingChange()
@@ -884,6 +923,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             notify("Could not save the pairing", error.localizedDescription)
         }
         refresh()
+        publishControlState()
     }
 
     @objc private func forgetDevice(_ sender: NSMenuItem) {
@@ -909,6 +949,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             notify("Could not forget it", error.localizedDescription)
         }
         refresh()
+        publishControlState()
     }
 
     // MARK: Arrangement
@@ -1013,6 +1054,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         if restart { startSession() }
         refresh()
+        publishControlState()
     }
 
     @objc private func toggleClipboard() {
@@ -1050,34 +1092,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleLoginItem() {
-        let wasOn = LaunchAgent.installedRole != nil
-        do {
-            if wasOn {
-                try LaunchAgent.uninstall()
-            } else {
-                try LaunchAgent.install(role: mode.runtimeRole, extraArguments: [])
-                try LaunchAgent.start()
-            }
-        } catch {
-            notify("Could not change this", error.localizedDescription)
+        // A switch someone turned off in System Settings can only be turned back on there.
+        if LoginItem.needsApproval {
+            LoginItem.openSettings()
+            notify("Turn Edge on in System Settings",
+                   "Edge is switched off under Login Items. Turn it back on there.")
             refresh()
             return
         }
-
-        // Check rather than assume. A tick that does not match what will happen at login is
-        // the one kind of wrong this switch can be, and it is invisible until the next login.
-        let isOn = LaunchAgent.installedRole != nil
-        if isOn == wasOn {
-            notify("Could not change this",
-                   wasOn ? "Turn Edge off under System Settings ▸ General ▸ Login Items."
-                         : "Edge could not install its login item.")
+        let outcome = LoginItem.isEnabled ? LoginItem.disable() : LoginItem.enable()
+        if case let .finishInSettings(what) = outcome {
+            // Taken straight to the place that settles it, rather than told where to look.
+            LoginItem.openSettings()
+            notify("Finish this in System Settings", what)
         }
         refresh()
     }
 
     @objc private func openLog() {
         if !FileManager.default.fileExists(atPath: logURL.path) {
-            try? Paths.ensureSupportDirectory()
+            _ = try? Paths.ensureSupportDirectory()
             FileManager.default.createFile(atPath: logURL.path, contents: Data())
         }
         NSWorkspace.shared.open(logURL)
@@ -1087,6 +1121,200 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         blinkTimer?.invalidate()
         stopSession()
         NSApp.terminate(nil)
+    }
+
+    // MARK: - Control Center
+
+    /// Whether this copy of Edge has its Control Center controls at all: macOS 26 and later,
+    /// running as the app with the extension built into it.
+    private var controlsAvailable: Bool {
+        guard #available(macOS 26.0, *), let plugIns = Bundle.main.builtInPlugInsURL else {
+            return false
+        }
+        return FileManager.default.fileExists(
+            atPath: plugIns.appendingPathComponent("EdgeControls.appex").path)
+    }
+
+    /// Tells the control what to show, and has WidgetKit redraw it — only when it changed.
+    private func publishControlState() {
+        guard controlsAvailable else { return }
+        let store = (try? SecretStore.load()) ?? SecretStore()
+        let state = lastKnownState
+        let control = ControlState(paired: !store.pairings.isEmpty,
+                                   running: isRunning,
+                                   connected: state?.connected == true,
+                                   pointerAway: state?.pointerIsRemote == true,
+                                   isPrimary: mode == .host,
+                                   peerName: state?.peerName)
+        guard control != lastPublishedControl else { return }
+        do {
+            try control.write()
+        } catch {
+            Log.debug("could not write the control state: \(error.localizedDescription)")
+            return
+        }
+        lastPublishedControl = control
+        if #available(macOS 26.0, *) {
+            ControlCenter.shared.reloadControls(ofKind: ControlState.powerKind)
+        }
+    }
+
+    /// What a tap on one of the controls asked for.
+    ///
+    /// Deferred a turn, so that when the tap is what launched the app, everything `start()`
+    /// queued — the permission check, the secondary readying itself — has happened first and
+    /// this sees the state it will actually be acting on.
+    func handleControlURL(_ url: URL) {
+        guard url.scheme == ControlState.scheme else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let paired = !(((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty)
+            switch url.host {
+            case "start":
+                if !paired {
+                    self.showMenuAtPointer()
+                } else if !self.isRunning {
+                    self.stoppedByHand = false
+                    self.startSession()
+                }
+            case "stop":
+                if self.isRunning {
+                    self.stoppedByHand = true
+                    self.autoStartWork?.cancel()
+                    self.stopSession()
+                }
+            case "options":
+                self.showMenuAtPointer()
+            default:
+                Log.debug("ignored an unknown control link: \(url.absoluteString)")
+            }
+            self.refresh()
+            self.publishControlState()
+        }
+    }
+
+    /// The whole menu, where the pointer is — which, after a click in Control Center, is right
+    /// beside the control that asked for it.
+    private func showMenuAtPointer() {
+        NSApp.activate(ignoringOtherApps: true)
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    /// Opening Edge again while it is running, from Finder, Spotlight or Launchpad.
+    ///
+    /// The way back that cannot be lost, as in most menu-bar apps that let the icon be hidden:
+    /// it always brings the icon back, and opens its menu so it is obvious where it went.
+    func reopened() {
+        if !statusItem.isVisible {
+            prefersHiddenIcon = false
+            statusItem.isVisible = true
+            stopReachabilityChecks()
+        }
+        DispatchQueue.main.async { [weak self] in self?.statusItem.button?.performClick(nil) }
+    }
+
+    // MARK: Hiding the menu-bar icon
+
+    /// Never on its own: the icon is only hidden while Control Center can reach this same
+    /// menu. Otherwise Edge would be running with no way to see it, stop it or quit it.
+    private var prefersHiddenIcon: Bool {
+        get { UserDefaults.standard.bool(forKey: "hideMenuBarIcon") }
+        set { UserDefaults.standard.set(newValue, forKey: "hideMenuBarIcon") }
+    }
+
+    /// The Edge controls placed in Control Center or the menu bar, or nil if macOS would not say.
+    private func placedControls(_ completion: @escaping (Set<String>?) -> Void) {
+        guard controlsAvailable, #available(macOS 26.0, *) else { completion(nil); return }
+        Task {
+            let kinds: Set<String>?
+            do {
+                kinds = Set(try await ControlCenter.shared.currentControls().map(\.kind))
+            } catch {
+                Log.debug("could not list placed controls: \(error.localizedDescription)")
+                kinds = nil
+            }
+            DispatchQueue.main.async { completion(kinds) }
+        }
+    }
+
+    /// The Options control is what makes hiding safe: it opens this menu, Quit included.
+    /// The Edge control alone can start and stop, but leads nowhere else.
+    private static func canReachMenu(_ kinds: Set<String>?) -> Bool {
+        kinds?.contains(ControlState.optionsKind) == true
+    }
+
+    /// Shows the icon unless it was hidden *and* Control Center can still reach the menu.
+    ///
+    /// Not knowing counts as "cannot reach": an icon shown that need not be costs a few
+    /// pixels, an icon hidden that should not be costs the only way to quit.
+    private func applyMenuBarVisibility() {
+        guard prefersHiddenIcon else {
+            statusItem.isVisible = true
+            stopReachabilityChecks()
+            return
+        }
+        placedControls { [weak self] kinds in
+            guard let self else { return }
+            if Self.canReachMenu(kinds) {
+                self.statusItem.isVisible = false
+                self.startReachabilityChecks()
+            } else {
+                // Removed from Control Center while the icon was hidden: come back, and stay.
+                // Re-adding the control later should not make the icon vanish by surprise.
+                self.prefersHiddenIcon = false
+                self.statusItem.isVisible = true
+                self.stopReachabilityChecks()
+                Log.info("Edge Options is no longer in Control Center — showing the menu-bar icon again")
+            }
+        }
+    }
+
+    private func startReachabilityChecks() {
+        guard reachabilityTimer == nil else { return }
+        // Removing a control is not announced, so look. Often enough that a missing icon is
+        // noticed back within moments; rarely enough to cost nothing.
+        reachabilityTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.applyMenuBarVisibility()
+        }
+    }
+
+    private func stopReachabilityChecks() {
+        reachabilityTimer?.invalidate()
+        reachabilityTimer = nil
+    }
+
+    @objc private func toggleMenuBarIcon() {
+        guard statusItem.isVisible else {
+            prefersHiddenIcon = false
+            statusItem.isVisible = true
+            stopReachabilityChecks()
+            return
+        }
+        placedControls { [weak self] kinds in
+            guard let self else { return }
+            guard Self.canReachMenu(kinds) else {
+                let hasPower = kinds?.contains(ControlState.powerKind) == true
+                self.notify(hasPower ? "Add Edge Options as well"
+                                     : "Add Edge to Control Center first",
+                            (hasPower
+                             ? "The Edge control starts and stops, but Edge Options is what opens "
+                               + "this menu — and Quit — once the icon is gone.\n\n"
+                             : "Without the icon, Control Center is the way back to this menu, so "
+                               + "the icon stays until Edge is there.\n\n")
+                            + "Open Control Center, click Edit Controls at the bottom, search for "
+                            + "Edge, and add Edge Options. For a tile like Wi-Fi's, add Edge too: "
+                            + "Edge at medium size with Options small beside it.")
+                return
+            }
+            self.prefersHiddenIcon = true
+            self.statusItem.isVisible = false
+            self.startReachabilityChecks()
+            self.notify("Edge is in Control Center now",
+                        "Use Edge Options there for this menu. To bring the icon back, tick Show "
+                        + "in Menu Bar from there, or open Edge again from Applications.\n\n"
+                        + "If Edge Options is ever removed from Control Center, the icon comes "
+                        + "back on its own.")
+        }
     }
 
     // MARK: - The session process
@@ -1106,7 +1334,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
 
-        try? Paths.ensureSupportDirectory()
+        _ = try? Paths.ensureSupportDirectory()
         if !FileManager.default.fileExists(atPath: logURL.path) {
             FileManager.default.createFile(atPath: logURL.path, contents: Data())
         }
@@ -1220,8 +1448,34 @@ func runMenuBar() -> Never {
     let app = NSApplication.shared
     // Accessory: a menu-bar item, no Dock icon, no main window.
     app.setActivationPolicy(.accessory)
+    // Whether Edge opens at login is the Start at login switch's decision alone. Without this,
+    // macOS reopens whatever was running at logout, and Edge comes back with the switch off.
+    app.disableRelaunchOnLogin()
     let controller = MenuBarController()
+    // Kept alive for the life of the app: NSApplication holds its delegate weakly.
+    let delegate = MenuBarAppDelegate(controller: controller)
+    app.delegate = delegate
     controller.start()
-    app.run()
+    withExtendedLifetime(delegate) { app.run() }
     exit(0)
+}
+
+/// The two things only an application delegate is told about.
+final class MenuBarAppDelegate: NSObject, NSApplicationDelegate {
+    private let controller: MenuBarController
+
+    init(controller: MenuBarController) {
+        self.controller = controller
+    }
+
+    /// A tap on one of the Control Center controls — including the one that launched the app.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach(controller.handleControlURL)
+    }
+
+    /// Opened again while already running.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        controller.reopened()
+        return false
+    }
 }

@@ -142,8 +142,10 @@ extension Commands {
             state.mutate { $0.clipboardActive = clipboard.isActive; $0.save() }
             session.clipboard = clipboard
             session.clipboardLimit = clipboardLimit
-            session.onPeerDisplays = { [weak directory] displays, keyID in
-                directory?.noteDisplays(displays, forKeyID: keyID)
+            // Strong, like every other use of `directory` in this closure: it lives as long as
+            // the command does, and a weak capture here only pretended otherwise.
+            session.onPeerDisplays = { displays, keyID in
+                directory.noteDisplays(displays, forKeyID: keyID)
             }
             session.attach(link: link)
         }
