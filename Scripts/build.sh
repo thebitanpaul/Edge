@@ -34,15 +34,7 @@ BUNDLE_ID="app.edge.cli"
 APP="$ROOT/build/Edge.app"
 ICON="$ROOT/Resources/Edge.icns"
 # A self-signed identity created by Scripts/create-signing-identity.sh, if the user made one.
-# The old name is accepted too: what matters is that the identity is stable, not what it is
-# called, and making people re-run the script for a rename would be a rebuild's worth of
-# re-ticking privacy checkboxes for nothing.
 SIGNING_IDENTITY="Edge Local Signing"
-if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
-  if security find-identity -v -p codesigning 2>/dev/null | grep -q "Continuous Local Signing"; then
-    SIGNING_IDENTITY="Continuous Local Signing"
-  fi
-fi
 
 # Anything in build/ left over from a previous name. A stale Continuous.app is not inert:
 # it holds its own privacy grants, it is what a login item installed before the rename still
@@ -262,11 +254,6 @@ sign_all() {
 
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
   echo "==> Signing as \"$SIGNING_IDENTITY\" (stable identity — permissions survive rebuilds)"
-  if [ "$SIGNING_IDENTITY" != "Edge Local Signing" ]; then
-    echo "    That certificate still has the old name. It is only a label: what makes your"
-    echo "    Accessibility and Input Monitoring grants stick is that the identity does not"
-    echo "    change, so leave it alone. Making a new one would reset them again."
-  fi
 
   # The first signature with a new key makes the keychain put up a dialog, and codesign then
   # waits for it indefinitely. A build that hangs with no explanation is worse than one that
