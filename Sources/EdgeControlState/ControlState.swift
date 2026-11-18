@@ -47,12 +47,12 @@ public struct ControlState: Codable, Equatable, Sendable {
     /// The line under "Edge" on a medium-sized control.
     public var subtitle: String {
         switch phase {
-        case .notSetUp:   return "Set up"
+        case .notSetUp:   return "Not set up"
         case .stopped:    return "Off"
         case .connecting: return "Connecting…"
         case .ready:      return "Ready"
         case .connected:  return peerName.map { "On · \($0)" } ?? "On"
-        case .away:       return peerName.map { "On \($0)" } ?? "On the other Mac"
+        case .away:       return peerName.map { "Pointer on \($0)" } ?? "Pointer on the other Mac"
         }
     }
 

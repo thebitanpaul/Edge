@@ -7,8 +7,20 @@ import Foundation
 /// when something has gone wrong and a socket would be the thing that is broken.
 public struct RuntimeState: Codable, Sendable {
     public enum Role: String, Codable, Sendable {
-        case sharing     // this Mac's keyboard and mouse are being shared out
-        case listening   // this Mac is lending its screen
+        case sharing     // the primary: this Mac's keyboard and mouse drive the other
+        case listening   // the secondary: driven from the other Mac
+
+        /// What people call it. The raw values are a file format and stay as they are.
+        public var displayName: String { self == .sharing ? "primary" : "secondary" }
+
+        /// The same, for the role a Mac advertises over Bonjour ("host" or "client").
+        public static func displayName(advertised: String) -> String {
+            switch advertised {
+            case "host":   return "primary"
+            case "client": return "secondary"
+            default:       return advertised
+            }
+        }
     }
 
     public var role: Role

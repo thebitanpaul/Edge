@@ -174,6 +174,8 @@ struct CodecTests {
         .scroll(dx: -10, dy: 10, isPixel: false),
         .keyEvent(keyCode: 0xFFFF, down: true, isRepeat: true, flags: .max),
         .flagsChanged(flags: 0),
+        .mediaKey(key: 0, down: true, isRepeat: false),
+        .mediaKey(key: 23, down: false, isRepeat: true),
         .screenInfo(displays: []),
         .screenInfo(displays: (0..<4).map { Display(x: Int32($0), y: 0, width: 100, height: 100, isMain: $0 == 0) }),
         .clipboard(kind: "public.utf8-plain-text", payload: Data("hello".utf8)),

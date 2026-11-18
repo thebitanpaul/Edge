@@ -45,7 +45,7 @@ public enum NetworkPairing {
         public var errorDescription: String? {
             switch self {
             case .noPeerFound:
-                return "no other Mac is waiting to pair — start pairing on it too, within a couple of minutes"
+                return "no other Mac is waiting to pair — start pairing on it too, within three minutes"
             case .cancelled:
                 return "pairing was cancelled"
             case .refusedByPeer:

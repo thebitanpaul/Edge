@@ -15,7 +15,7 @@ extension Commands {
 
         guard ProcessInfo.processInfo.isOperatingSystemAtLeast(
             OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)) else {
-            bad("Control Center controls need macOS 26 or later")
+            bad("the Edge switch in Control Center needs macOS 26 or later")
             return
         }
         ok("macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
@@ -79,9 +79,9 @@ extension Commands {
 
         if let handler = NSWorkspace.shared.urlForApplication(toOpen: ControlState.startURL) {
             if handler.resolvingSymlinksInPath().path == Bundle.main.bundleURL.resolvingSymlinksInPath().path {
-                ok("taps on the controls open this copy of Edge")
+                ok("taps on the switch open this copy of Edge")
             } else {
-                warn("taps on the controls open a different copy: \(handler.path)")
+                warn("taps on the switch open a different copy: \(handler.path)")
             }
         } else {
             bad("nothing handles edge-control:// links — open Edge.app once, then check again")

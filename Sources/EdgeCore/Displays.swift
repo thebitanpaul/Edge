@@ -43,16 +43,22 @@ public final class DisplayWatcher {
 
     public init() {}
 
+    /// One function for registering and removing. CoreGraphics matches a removal by the
+    /// function *and* the context, and two closure literals are two different functions — so
+    /// removing with a fresh one silently removed nothing, left registrations piling up, and
+    /// left CoreGraphics holding a pointer to a watcher that had been freed.
+    private static let callback: CGDisplayReconfigurationCallBack = { _, flags, userInfo in
+        guard let userInfo else { return }
+        // Reconfiguration is reported as a begin/end pair per display; acting on the
+        // "begin" half reads a layout that is still mid-change.
+        guard !flags.contains(.beginConfigurationFlag) else { return }
+        Unmanaged<DisplayWatcher>.fromOpaque(userInfo).takeUnretainedValue().scheduleEmit()
+    }
+
     public func start() {
         guard !registered else { return }
         let context = Unmanaged.passUnretained(self).toOpaque()
-        let status = CGDisplayRegisterReconfigurationCallback({ _, flags, userInfo in
-            guard let userInfo else { return }
-            // Reconfiguration is reported as a begin/end pair per display; acting on the
-            // "begin" half reads a layout that is still mid-change.
-            guard !flags.contains(.beginConfigurationFlag) else { return }
-            Unmanaged<DisplayWatcher>.fromOpaque(userInfo).takeUnretainedValue().scheduleEmit()
-        }, context)
+        let status = CGDisplayRegisterReconfigurationCallback(Self.callback, context)
 
         if status == .success {
             registered = true
@@ -64,7 +70,7 @@ public final class DisplayWatcher {
     public func stop() {
         guard registered else { return }
         let context = Unmanaged.passUnretained(self).toOpaque()
-        CGDisplayRemoveReconfigurationCallback({ _, _, _ in }, context)
+        CGDisplayRemoveReconfigurationCallback(Self.callback, context)
         registered = false
         debounce?.cancel()
     }

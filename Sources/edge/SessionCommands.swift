@@ -39,6 +39,10 @@ final class PairingWatcher {
     }
 }
 
+/// Where session state is written from paths that must not wait on a disk: one serial
+/// queue, so writes land in order and the last one wins.
+private let stateWriter = DispatchQueue(label: "app.edge.state-writer", qos: .utility)
+
 extension Commands {
 
     // MARK: - listen  (the Mac lending its screen)
@@ -82,6 +86,7 @@ extension Commands {
 
         let injector = EventInjector()
         let session = ReceivingSession(injector: injector)
+        let activity = SessionActivity(reason: "injecting keyboard and pointer input from another Mac")
         session.filesEnabled = config.fileSharing
         session.revealReceivedFiles = config.revealReceivedFiles
         let clipboardLimit = config.clipboardLimit
@@ -134,6 +139,9 @@ extension Commands {
             ok("link up  ←  \(Style.bold(peer.name))  [\(peer.deviceID.short)]  \(peer.endpoint)")
             info("\(peer.tlsDescription)  ·  key \(String(Crypto.hex(peer.keyID).prefix(8)))")
 
+            // A link that has not noticed it is dead yet may still hold the old bridge; its
+            // polling timer has to stop before a new one takes over.
+            session.clipboard?.detach()
             let clipboard = ClipboardBridge(config: config) { [weak link] message in
                 link?.send(message)
             }
@@ -148,10 +156,18 @@ extension Commands {
                 directory.noteDisplays(displays, forKeyID: keyID)
             }
             session.attach(link: link)
+            activity.update(linked: true, keepAwake: true)
         }
 
-        listener.onLinkClosed = { peer, error in
+        listener.onLinkClosed = { linkID, peer, error in
+            // A half-open link from before a reconnect can time out after its replacement is
+            // already up. Detaching then would drop the new link's clipboard, input and state.
+            guard session.isCurrent(linkID) else {
+                Log.debug("an earlier link closed; the current one is unaffected")
+                return
+            }
             session.detach()
+            activity.update(linked: false)
             state.mutate { $0.connected = false; $0.lastError = error?.localizedDescription; $0.save() }
             if let error { bad("link down: \(error.localizedDescription)") }
             else if let peer { info("link closed  ·  \(peer.name)") }
@@ -174,10 +190,12 @@ extension Commands {
         // timers coalesced. Injecting events late and answering heartbeats late is what a
         // 56 ms mean round trip on a LAN looks like, and why the terminal felt smooth and
         // the menu bar did not.
-        let activity = ProcessInfo.processInfo.beginActivity(
-            options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
-            reason: "injecting keyboard and pointer input from another Mac")
-        defer { ProcessInfo.processInfo.endActivity(activity) }
+        //
+        // While linked it also keeps this Mac awake. The secondary gets no input of its own
+        // while you work on the primary, so it would otherwise idle-sleep mid-session and be
+        // gone the next time the pointer crossed. With no link it is free to sleep.
+        activity.update(linked: false)
+        defer { activity.end() }
 
         try listener.start()
         session.startWatchingDisplays()
@@ -199,6 +217,7 @@ extension Commands {
             session.stopWatchingDisplays()
             listener.stop()
             RuntimeState.clear(.listening)
+            activity.end()
             // Give the port a moment to come free before binding it again.
             Thread.sleep(forTimeInterval: 0.4)
             return try listen(args)
@@ -218,11 +237,6 @@ extension Commands {
         case ended                  // closed cleanly, or the user stopped it
         case dropped(Error?)        // lost the link; worth retrying
         case fatal(String, code: Int32 = 1)   // retrying would fail the same way
-
-        var isRetryable: Bool {
-            if case .dropped = self { return true }
-            return false
-        }
     }
 
     static func connect(_ args: Args) throws {
@@ -359,6 +373,7 @@ extension Commands {
         link.onReady = { peer in
             directory.note(peer: peer)
             sharing?.peerAcceptsFiles = peer.capabilities.contains(.files)
+            sharing?.peerAcceptsMediaKeys = peer.capabilities.contains(.mediaKeys)
             ok("link up  →  \(Style.bold(peer.name))  [\(peer.deviceID.short)]  \(peer.endpoint)")
             info("\(peer.tlsDescription)  ·  key \(String(Crypto.hex(peer.keyID).prefix(8)))")
             out()
@@ -467,7 +482,10 @@ extension Commands {
                 }
             }
             sharing.onModeChange = { mode in
-                state.mutate { $0.pointerIsRemote = (mode == .remote); $0.save() }
+                // Called from inside the event tap at the moment of crossing. The file write
+                // happens elsewhere: a disk write in the tap is time the pointer waits for.
+                state.mutate { $0.pointerIsRemote = (mode == .remote) }
+                stateWriter.async { state.value.save() }
                 switch mode {
                 case .remote: out("  \(Style.cyan("→"))  pointer is on \(Style.bold(peer.name))")
                 case .local:  out("  \(Style.green("←"))  pointer is back on this Mac")
@@ -531,8 +549,8 @@ extension Commands {
             return
         }
 
-        let what = other.role == .sharing ? "sharing this Mac's keyboard and mouse"
-                                          : "lending this Mac's screen"
+        let what = other.role == .sharing ? "running as the primary"
+                                          : "running as the secondary"
         throw EdgeError.invalidArgument(
             "another Edge session is already \(what) (pid \(other.pid)).\n"
             + "  Two at once means two event taps and doubled traffic, which shows up as a\n"
@@ -615,14 +633,28 @@ final class ReceivingSession {
     func stopWatchingDisplays() { watcher.stop() }
 
     func attach(link: SecureLink) {
-        lock.lock(); self.link = link; lock.unlock()
+        lock.lock()
+        let replaced = currentLinkID.map { $0 != ObjectIdentifier(link) } ?? false
+        self.link = link
+        currentLinkID = ObjectIdentifier(link)
+        lock.unlock()
+        if replaced { Log.debug("a new link replaced one that had not closed yet") }
         link.onMessage = { [weak self] message in self?.handle(message) }
         // The sending Mac needs our screen arrangement to work out where its pointer should
         // go, so this is the first thing we say.
         link.send(.screenInfo(displays: Displays.current()))
     }
 
+    private var currentLinkID: ObjectIdentifier?
+
+    /// Whether `linkID` is the link this session is attached to now.
+    func isCurrent(_ linkID: ObjectIdentifier) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return currentLinkID == linkID
+    }
+
     func detach() {
+        lock.lock(); currentLinkID = nil; lock.unlock()
         // Whatever ended the link, this Mac gets its cursor back.
         showLocalCursor()
         clipboard?.detach()
@@ -659,11 +691,16 @@ final class ReceivingSession {
             injector.scroll(dx: dx, dy: dy, isPixel: isPixel)
 
         case let .keyEvent(code, down, isRepeat, flags):
+            // Deliberately not logged, at any level: a line per key code is a keylog, and
+            // session.log is a plain file anyone with this account can read.
             injector.key(code: code, down: down, isRepeat: isRepeat, flags: flags)
-            Log.debug("key \(down ? "down" : "up  ") code \(code) flags \(String(flags, radix: 16))")
 
         case let .flagsChanged(flags):
             injector.changeFlags(flags)
+
+        case let .mediaKey(key, down, isRepeat):
+            injector.mediaKey(MediaKey(key: key, down: down, isRepeat: isRepeat))
+            Log.debug("media key \(key) \(down ? "down" : "up")")
 
         case let .enterScreen(x, y, flags):
             showLocalCursor()

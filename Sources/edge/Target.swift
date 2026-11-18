@@ -168,7 +168,7 @@ enum Target {
             let candidate = host.hasSuffix(".local") ? host : host + ".local"
             info("trying \(candidate)")
             return (try LinkConnector.parseEndpoint(candidate, defaultPort: config.port),
-                    "Wi-Fi, \(candidate)")
+                    "Network, \(candidate)")
         }
 
         if let remembered = pairing.lastEndpoint {
@@ -183,7 +183,7 @@ enum Target {
             could not find '\(pairing.label)' on the network.
               · is the other Mac started, and set to the opposite role?
               · Bonjour is blocked on many managed networks. Set the other Mac's address:
-                    menu bar ▸ Devices ▸ \(pairing.label) ▸ Set address
+                    menu bar ▸ Devices ▸ \(pairing.label) ▸ Set address…
                     edge connect <address> --pair "\(pairing.label)"
               · `edge discover` shows what is visible from here
             """)

@@ -38,7 +38,7 @@ extension Commands {
             out("  \(name)  \(addr.split(separator: " ")[0])")
         }
         if let running = RuntimeState.all.first(where: \.isLive) {
-            ok("a session is running (\(running.role.rawValue), pid \(running.pid))")
+            ok("a session is running (\(running.role.displayName), pid \(running.pid))")
         } else {
             info("no session running here")
         }
@@ -110,7 +110,7 @@ extension Commands {
         if problems.isEmpty {
             ok("nothing obviously wrong from this side")
             out(Style.dim("    If it still will not connect, check the other Mac's menu bar:"))
-            out(Style.dim("    one Mac must share its keyboard and the other must lend its screen."))
+            out(Style.dim("    one Mac must be set to Primary and the other to Secondary."))
         } else {
             for problem in problems { bad(problem) }
         }
@@ -146,7 +146,7 @@ enum FirewallCheck {
         out(Style.dim("      sudo \(tool) --add \"\(path)\""))
         out(Style.dim("      sudo \(tool) --unblockapp \"\(path)\""))
         out()
-        out(Style.dim("    Only the Mac that lends its screen needs this — it is the one being"))
+        out(Style.dim("    Only the secondary needs this — it is the one being"))
         out(Style.dim("    connected to. A managed Mac may not let you change it."))
     }
 

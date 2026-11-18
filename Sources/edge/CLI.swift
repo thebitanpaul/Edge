@@ -34,7 +34,7 @@ struct Args {
     static let booleanFlags: Set<String> = [
         "help", "version", "no-bonjour", "allow-public", "rebind",
         "json", "quiet", "prompt", "no-prompt", "force", "once", "keys", "link-only",
-        "no-retry", "open",
+        "no-retry", "open", "media", "verbose",
     ]
 
     init(_ argv: [String]) {
@@ -154,15 +154,16 @@ enum Runtime {
     /// Takes a predicate rather than reading `interrupted` directly, because "this connection
     /// ended" and "the user pressed Ctrl-C" are different things: conflating them means a
     /// dropped link looks like a request to quit, and nothing ever reconnects.
+    ///
+    /// The timeout is how often an idle session wakes to check: half a second, not a tenth.
+    /// Everything urgent arrives as an input source — the event tap, a network callback, a
+    /// queued block — and wakes the loop by itself; the timeout only bounds how long a quit or
+    /// a deadline can go unnoticed.
     static func run(while shouldContinue: () -> Bool, onTick: (() -> Void)? = nil) {
         while shouldContinue() {
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.5))
             onTick?()
         }
-    }
-
-    static func runUntilInterrupted(onTick: (() -> Void)? = nil) {
-        run(while: { !interrupted }, onTick: onTick)
     }
 
     static func installSignalHandlers() {

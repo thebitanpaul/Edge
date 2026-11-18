@@ -55,14 +55,23 @@ public enum Log {
         set { lock.lock(); _level = newValue; lock.unlock() }
     }
 
-    public static func trace(_ m: @autoclosure () -> String) { emit(.trace, m()) }
-    public static func debug(_ m: @autoclosure () -> String) { emit(.debug, m()) }
-    public static func info(_ m: @autoclosure () -> String)  { emit(.info, m()) }
-    public static func warn(_ m: @autoclosure () -> String)  { emit(.warn, m()) }
-    public static func error(_ m: @autoclosure () -> String) { emit(.error, m()) }
+    // The level is checked before the message is built. These are called from the event tap
+    // and per received input event; building a string that is then thrown away, on every
+    // keystroke and pointer movement, is the cost the autoclosure exists to avoid.
+    public static func trace(_ m: @autoclosure () -> String) { if enabled(.trace) { emit(.trace, m()) } }
+    public static func debug(_ m: @autoclosure () -> String) { if enabled(.debug) { emit(.debug, m()) } }
+    public static func info(_ m: @autoclosure () -> String)  { if enabled(.info) { emit(.info, m()) } }
+    public static func warn(_ m: @autoclosure () -> String)  { if enabled(.warn) { emit(.warn, m()) } }
+    public static func error(_ m: @autoclosure () -> String) { if enabled(.error) { emit(.error, m()) } }
+
+    @inline(__always)
+    private static func enabled(_ lvl: LogLevel) -> Bool {
+        // Read without the lock: the level is set once at start-up, and a torn read of a
+        // one-byte enum during that instant could only mis-route a single log line.
+        lvl >= _level
+    }
 
     private static func emit(_ lvl: LogLevel, _ message: String) {
-        guard lvl >= level else { return }
         let line: String
         if useColor {
             line = "\u{1B}[2m\(stamp.string(from: Date()))\u{1B}[0m \(lvl.color)\(lvl.label)\u{1B}[0m \(message)\n"

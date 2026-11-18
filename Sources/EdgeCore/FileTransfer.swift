@@ -251,12 +251,6 @@ public final class FileReceiver {
         if ready { commit(peerName: peerName) }
     }
 
-    /// True while something is being carried but has not landed.
-    public var isCarrying: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return transfer != nil
-    }
-
     /// Drops a transfer in progress. Called when the link goes away mid-file, so a half
     /// written file never appears in the destination folder looking complete.
     public func abandon() {

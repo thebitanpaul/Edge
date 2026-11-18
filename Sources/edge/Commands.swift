@@ -53,7 +53,7 @@ enum Commands {
         do {
             let store = try SecretStore.load()
             if store.pairings.isEmpty {
-                warn("none — run `edge pair init` on the Mac that will lend its screen")
+                warn("none — run `edge pair nearby` on both Macs")
             } else {
                 for p in store.pairings {
                     ok("\(p.label)  ·  key \(String(p.keyIDHex.prefix(8)))  ·  \(p.statusText)")
@@ -68,9 +68,9 @@ enum Commands {
         let ax = Permissions.accessibility()
         let im = Permissions.inputMonitoring()
         if ax.isGranted { ok("Accessibility: granted") }
-        else { warn("Accessibility: \(ax) — needed from milestone 2 onwards") }
+        else { warn("Accessibility: \(ax) — needed on both Macs") }
         if im.isGranted { ok("Input Monitoring: granted") }
-        else { warn("Input Monitoring: \(im) — needed from milestone 3 onwards") }
+        else { warn("Input Monitoring: \(im) — needed on the primary") }
         if Permissions.isRunningInsideAppBundle {
             ok("running from an .app bundle (permissions attach to Edge)")
         } else {
@@ -116,7 +116,7 @@ enum Commands {
 
         out()
         info("looking for another Mac that is also pairing…")
-        out(Style.dim("  Run `edge pair nearby` on the other Mac too, within two minutes."))
+        out(Style.dim("  Run `edge pair nearby` on the other Mac too, within three minutes."))
         out()
         let addresses = NetworkAddress.localAddresses()
         if !addresses.isEmpty {
@@ -157,7 +157,7 @@ enum Commands {
         out()
         out("      \(Style.cyan(Style.bold(digits)))")
         out()
-        out("  If \(peerName) shows the same six digits, nothing is between them.")
+        out("  If \(peerName) shows the same six digits, nothing is listening in between.")
         out("  Confirm on both Macs.")
         out()
 
@@ -206,9 +206,7 @@ enum Commands {
 
         out()
         ok("paired with \(outcome.peerName)  ·  key \(String(pairing.keyIDHex.prefix(8)))")
-        info("both Macs derived the same key, so they cannot differ")
-        out(Style.dim("  Now set one Mac to share its keyboard and the other to lend its screen,"))
-        out(Style.dim("  then start both:  edge connect   /   edge listen"))
+        out(Style.dim("  Now start the secondary (edge listen), then the primary (edge connect)."))
     }
 
     /// Kept only to explain where it went.
@@ -231,14 +229,13 @@ enum Commands {
         let store = try SecretStore.load()
         guard !store.pairings.isEmpty else {
             warn("no pairings yet")
-            out(Style.dim("  edge pair init          on the Mac that lends its screen"))
-            out(Style.dim("  edge pair join <CODE>   on the Mac with the keyboard"))
+            out(Style.dim("  edge pair nearby   on both Macs"))
             return
         }
         let pending = store.pairings.filter { !$0.isBound }.count
         if pending > 0 {
-            info("\(pending) pairing\(pending == 1 ? "" : "s") set up but never used — "
-                 + "they are not paired Macs until a connection succeeds")
+            info("\(pending) pairing\(pending == 1 ? "" : "s") not used yet — "
+                 + "each locks to the other Mac on its first connection")
         }
         out(Style.bold("  LABEL                 KEY       PEER                  LAST SEEN     ENDPOINT"))
         for p in store.pairings {
@@ -276,7 +273,7 @@ enum Commands {
         for p in peers {
             let name = p.serviceName.padding(toLength: 30, withPad: " ", startingAt: 0)
             let id = (p.deviceID?.short ?? "—").padding(toLength: 11, withPad: " ", startingAt: 0)
-            out("  \(name)  \(id)  \(p.role ?? "—")")
+            out("  \(name)  \(id)  \(p.role.map(RuntimeState.Role.displayName(advertised:)) ?? "—")")
         }
         out()
         out(Style.dim("  Connect with:  edge connect \"<NAME>\""))

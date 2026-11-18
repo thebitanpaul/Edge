@@ -19,11 +19,11 @@ extension Commands {
         guard !states.isEmpty else {
             info("nothing running on this Mac")
             out()
-            out(Style.dim("    edge listen     to lend this Mac's screen"))
-            out(Style.dim("    edge connect    to share this Mac's keyboard and mouse"))
+            out(Style.dim("    edge listen     to run as the secondary"))
+            out(Style.dim("    edge connect    to run as the primary"))
             if let agent = LaunchAgent.installedRole {
                 out()
-                info("a login item is installed (\(agent.rawValue)) but is not running")
+                info("a launch agent is installed (\(agent.displayName)) but is not running")
                 out(Style.dim("    edge service start"))
             }
             return
@@ -54,7 +54,7 @@ extension Commands {
         }
 
         if let role = LaunchAgent.installedRole {
-            info("starts at login as '\(role.rawValue)'")
+            info("starts at login as the \(role.displayName)")
         }
     }
 
@@ -128,12 +128,12 @@ extension Commands {
 
     private static func serviceStatus(_ args: Args) throws {
         guard let role = LaunchAgent.installedRole else {
-            info("no login item installed")
-            out(Style.dim("    edge service install listen     on the Mac lending its screen"))
-            out(Style.dim("    edge service install connect    on the Mac with the keyboard"))
+            info("no launch agent installed")
+            out(Style.dim("    edge service install listen     on the secondary"))
+            out(Style.dim("    edge service install connect    on the primary"))
             return
         }
-        ok("login item installed: \(role.rawValue)")
+        ok("launch agent installed: \(role.displayName)")
         out("  plist   \(LaunchAgent.plistURL.path)")
         out("  logs    \(LaunchAgent.logURL.path)")
         if let running = RuntimeState.load(role), running.isLive {

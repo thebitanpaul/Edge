@@ -19,16 +19,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case client  // lend this Mac's screen
 
         var argument: String { self == .host ? "connect" : "listen" }
-        /// "Primary" and "secondary" rather than "share" and "lend".
-        ///
-        /// The old wording described what each Mac does for the other, which is the wrong
-        /// way round for someone deciding which to pick: you know which Mac you are sitting
-        /// at long before you know what it will be doing for the other one.
-        var title: String {
-            self == .host ? "Primary — this Mac's keyboard and mouse"
-                          : "Secondary — controlled by the other Mac"
-        }
-
+        /// "Primary" and "secondary" rather than "share" and "lend": you know which Mac you
+        /// are sitting at long before you know what it will be doing for the other one.
         var shortTitle: String { self == .host ? "Primary" : "Secondary" }
 
         var opposite: Mode { self == .host ? .client : .host }
@@ -59,6 +51,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var lastPublishedControl: ControlState?
     /// Runs while the menu-bar icon is hidden, to bring it back if Control Center loses Edge.
     private var reachabilityTimer: Timer?
+    /// Consecutive checks that did not find the switch. One is not enough to act on: macOS
+    /// briefly reports nothing placed while Control Center reloads, and taking that at face
+    /// value put the icon back every time Edge was turned on from the switch.
+    private var missedPlacementChecks = 0
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
 
@@ -96,10 +92,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+        // Let the system fold this into other wakeups; nobody notices a quarter second here.
+        refreshTimer?.tolerance = 0.25
         // Before anything reads it: an agent under the old name starts a bundle that no
         // longer exists, every login, with nothing in the interface to say so.
         LaunchAgent.removeFormerAgent()
         LoginItem.migrateFromLaunchAgent()
+        // Hidden from the first frame when that is the choice, then confirmed. Shown and then
+        // hidden a moment later read as a second icon appearing and vanishing.
+        if prefersHiddenIcon && controlsAvailable { statusItem.isVisible = false }
         applyMenuBarVisibility()
         permissionsWereGranted = missingPermissions.isEmpty
         // Anyone who already has a pairing has been through this; the flag is new, they are not.
@@ -184,6 +185,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             missing.map { "\($0.name) — \($0.why)" }.joined(separator: "\n")
             + "\n\nThese are safe to grant here: Edge talks only to the Mac you paired it "
             + "with, over your own network. There is no server, and nothing leaves your desk."
+            + "\n\nEdge's location is copied too, in case System Settings asks you to add it with +."
         for item in missing { alert.addButton(withTitle: "Open \(item.name)") }
         alert.addButton(withTitle: "Later")
 
@@ -323,6 +325,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.blinkOn.toggle()
                 self.statusItem.button?.alphaValue = self.blinkOn ? 1.0 : 0.35
             }
+            blinkTimer?.tolerance = 0.15
         } else if !shouldBlink, blinkTimer != nil {
             blinkTimer?.invalidate()
             blinkTimer = nil
@@ -380,7 +383,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         func addPermissionItems() {
             for item in missingPermissions {
                 menu.addItem(.separator())
-                menu.addItem(disabled("\(item.name) is off — \(item.why)"))
+                menu.addItem(disabled("\(item.name) is off — needed \(item.why)"))
                 let grant = action("Grant \(item.name)", #selector(grantPermission(_:)))
                 grant.representedObject = item.settingsURL
                 menu.addItem(grant)
@@ -389,10 +392,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         if store.pairings.isEmpty {
             menu.addItem(disabled("Not set up"))
-            menu.addItem(action("Set up", #selector(runSetup)))
+            menu.addItem(action("Set up…", #selector(runSetup)))
             addPermissionItems()
             menu.addItem(.separator())
-            menu.addItem(action("Quit", #selector(quit)))
+            menu.addItem(action("Quit Edge", #selector(quit)))
             return
         }
 
@@ -421,7 +424,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // The secondary has nothing to do until the primary dials, and nothing it can do
             // to hurry that along. "Ready" is the truth; "connecting" was not.
             menu.addItem(disabled("Secondary · ready"))
-            menu.addItem(disabled("Start it on the primary Mac"))
+            menu.addItem(disabled("Choose Start on the primary"))
         } else {
             menu.addItem(disabled("Primary · connecting"))
             menu.addItem(disabled(waitingHint))
@@ -433,7 +436,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let problem = linkProblem {
             menu.addItem(.separator())
             menu.addItem(disabled(problem))
-            menu.addItem(action("Use Wi-Fi instead", #selector(switchToWiFi)))
+            if ((try? Config.load()) ?? Config()).link != .auto {
+                menu.addItem(action("Use whichever connects", #selector(useAnyLink)))
+            }
         }
 
         menu.addItem(.separator())
@@ -470,24 +475,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(login)
 
         if controlsAvailable {
-            let icon = action("Show in Menu Bar", #selector(toggleMenuBarIcon))
+            let icon = action("Show in menu bar", #selector(toggleMenuBarIcon))
             icon.state = statusItem.isVisible ? .on : .off
             menu.addItem(icon)
         }
 
         menu.addItem(.separator())
-        menu.addItem(action("Reconfigure", #selector(runSetup)))
+        menu.addItem(action("Change role…", #selector(runSetup)))
         menu.addItem(helpMenuItem())
-        menu.addItem(action("Quit", #selector(quit)))
+        menu.addItem(action("Quit Edge", #selector(quit)))
     }
 
     private func helpMenuItem() -> NSMenuItem {
         let item = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         submenu.addItem(action("Open log", #selector(openLog)))
-        submenu.addItem(action("Report an issue", #selector(reportIssue)))
+        submenu.addItem(action("Report an issue…", #selector(reportIssue)))
         submenu.addItem(.separator())
-        submenu.addItem(disabled(Runtime.shortVersion))
+        submenu.addItem(disabled("Version \(Runtime.shortVersion)"))
         item.submenu = submenu
         return item
     }
@@ -575,7 +580,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard let problem, isRunning else { return }
 
         stopSession()
-        notify(problem, "Stopped.")
+        let config = (try? Config.load()) ?? Config()
+        notify(problem, config.link == .auto
+               ? "Edge stopped. Choose Start once this Mac is on a network."
+               : "Edge stopped. \(config.link == .cable ? "Connect the cable" : "Join a network"), "
+                 + "or choose Use whichever connects.")
         refresh()
     }
 
@@ -605,7 +614,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         Permissions.openSettings(url)
     }
 
-    @objc private func switchToWiFi() {
+    @objc private func useAnyLink() {
         applyConfig { $0.preferredLink = LinkPreference.auto.rawValue }
     }
 
@@ -650,9 +659,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let alert = NSAlert()
         NSApp.activate(ignoringOtherApps: true)
         alert.messageText = "Which Mac is this?"
-        alert.informativeText = "Set the other Mac to the opposite."
+        alert.informativeText = "Primary is the Mac whose keyboard and mouse you use. "
+            + "Set the other Mac to the other role."
         alert.addButton(withTitle: "Primary — I use this keyboard")
-        alert.addButton(withTitle: "Secondary")
+        alert.addButton(withTitle: "Secondary — controlled from the other Mac")
         alert.addButton(withTitle: "Cancel")
 
         let answer = alert.runModal()
@@ -691,7 +701,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let alert = NSAlert()
             alert.messageText = "This Mac is now Primary"
             alert.informativeText = "Set the other Mac to Secondary. "
-                + "The arrangement was reset — say where its screen sits."
+                + "The arrangement was reset — show where its screen sits."
             alert.addButton(withTitle: "Arrange screens")
             alert.addButton(withTitle: "Later")
             if alert.runModal() == .alertFirstButtonReturn {
@@ -707,7 +717,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     /// What to press, and where, once the roles are settled.
     private func startingInstruction(for chosen: Mode) -> String {
-        chosen == .host ? "Press Start here." : "Press Start on the primary."
+        chosen == .host ? "Choose Start here." : "Choose Start on the primary."
     }
 
     /// A short line naming the likeliest reason nothing has connected yet.
@@ -751,8 +761,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         submenu.addItem(.separator())
-        submenu.addItem(action("Connect to a nearby Mac", #selector(pairNearby)))
-        submenu.addItem(disabled("Choose this on both Macs"))
+        submenu.addItem(action("Connect to a nearby Mac…", #selector(pairNearby)))
+        submenu.addItem(disabled("Choose this on the other Mac too"))
         item.submenu = submenu
         return item
     }
@@ -773,8 +783,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         detail.addItem(.separator())
-        for (title, selector) in [("Rename", #selector(renameDevice(_:))),
-                                  ("Set address", #selector(setDeviceAddress(_:))),
+        for (title, selector) in [("Rename…", #selector(renameDevice(_:))),
+                                  ("Set address…", #selector(setDeviceAddress(_:))),
                                   ("Forget", #selector(forgetDevice(_:)))] {
             let entry = NSMenuItem(title: title, action: selector, keyEquivalent: "")
             entry.target = self
@@ -821,7 +831,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let store = (try? SecretStore.load()) ?? SecretStore()
         guard let pairing = store.pairings.first(where: { $0.label == label }) else { return }
 
-        guard let name = prompt(title: "Rename this Mac",
+        guard let name = prompt(title: "Rename \(pairing.peerName ?? pairing.label)",
                                 explanation: "A name for this list.",
                                 value: pairing.peerName ?? pairing.label,
                                 placeholder: "Work Mac",
@@ -847,7 +857,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let current = pairing.manualEndpoint ?? pairing.lastEndpoint ?? ""
         guard let address = prompt(
             title: "Address of the other Mac",
-            explanation: "For networks that block discovery. Empty for automatic.",
+            explanation: "Only needed on networks that block discovery. Leave it empty to find the Mac automatically.",
             value: current,
             placeholder: "192.168.1.42",
             confirm: "Save") else { return }
@@ -911,12 +921,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // and has already made itself ready.
             if mode == .host {
                 notify("Paired with \(outcome.peerName)",
-                       "Now say where its screen sits, then press Start.")
+                       "Now show where its screen sits, then choose Start.")
                 // One turn of the run loop, so the pairing window is fully gone first.
                 DispatchQueue.main.async { [weak self] in self?.performShowArrangement() }
             } else {
                 notify("Paired with \(outcome.peerName)",
-                       "This Mac is ready. Press Start on the primary.")
+                       "This Mac is ready. Choose Start on the primary.")
                 autoStartIfSecondary()
             }
         } catch {
@@ -934,8 +944,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func performForget(_ label: String?) {
         guard let label else { return }
         let confirm = NSAlert()
-        confirm.messageText = "Forget this Mac?"
-        confirm.informativeText = "You will have to pair them again."
+        confirm.messageText = "Forget “\(label)”?"
+        confirm.informativeText = "To use it again, pair the two Macs again."
         confirm.addButton(withTitle: "Forget")
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
@@ -957,7 +967,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func arrangementMenuItem() -> NSMenuItem {
         // Opens the window. Everything it offers lives there, so a submenu repeating it would
         // be a second place to change the same thing.
-        let item = NSMenuItem(title: "Screen arrangement", action: #selector(showArrangement),
+        let item = NSMenuItem(title: "Screen arrangement…", action: #selector(showArrangement),
                               keyEquivalent: "")
         item.target = self
         return item
@@ -1063,7 +1073,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         try? config.save()
 
         if config.clipboardSharing {
-            notify("Clipboard sharing on", "Turn it on over there as well.")
+            notify("Clipboard sharing on", "Turn on Share clipboard on the other Mac too.")
         }
         // The setting is read when a session starts, so an existing one has to be restarted.
         if isRunning {
@@ -1079,8 +1089,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         try? config.save()
         if config.fileSharing {
             notify("Dragged files will cross",
-                   "Drag a file at the shared edge and it lands in Downloads over there. "
-                   + "Turn it on over there as well.")
+                   "Drag a file across the shared edge and let go — it lands in Downloads on "
+                   + "the other Mac. Turn this on there too.")
         }
         if isRunning { stopSession(); startSession() }
         refresh()
@@ -1143,7 +1153,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let control = ControlState(paired: !store.pairings.isEmpty,
                                    running: isRunning,
                                    connected: state?.connected == true,
-                                   pointerAway: state?.pointerIsRemote == true,
+                                   // Not which Mac has the pointer: that changes at every
+                                   // crossing, and each change would wake Control Center and
+                                   // its extension for a detail nobody looks at there.
+                                   pointerAway: false,
                                    isPrimary: mode == .host,
                                    peerName: state?.peerName)
         guard control != lastPublishedControl else { return }
@@ -1263,13 +1276,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
         placedControls { [weak self] kinds in
-            guard let self else { return }
+            guard let self, self.prefersHiddenIcon else { return }
             if Self.canQuitFromControlCenter(kinds) {
+                self.missedPlacementChecks = 0
                 self.statusItem.isVisible = false
                 self.startReachabilityChecks()
+            } else if self.missedPlacementChecks == 0 {
+                // Ask again shortly before believing it.
+                self.missedPlacementChecks = 1
+                self.startReachabilityChecks()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                    self?.applyMenuBarVisibility()
+                }
             } else {
                 // Removed from Control Center while the icon was hidden: come back, and stay.
                 // Re-adding the control later should not make the icon vanish by surprise.
+                self.missedPlacementChecks = 0
                 self.prefersHiddenIcon = false
                 self.statusItem.isVisible = true
                 self.stopReachabilityChecks()
@@ -1285,6 +1307,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         reachabilityTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             self?.applyMenuBarVisibility()
         }
+        reachabilityTimer?.tolerance = 3
     }
 
     private func stopReachabilityChecks() {
@@ -1303,20 +1326,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             guard let self else { return }
             guard Self.canQuitFromControlCenter(kinds) else {
                 self.notify("Add Edge to Control Center first",
-                            "Without the icon, the Edge switch in Control Center is how Edge is "
-                            + "turned on and quit, so the icon stays until the switch is there.\n\n"
-                            + "Open Control Center, click Edit Controls at the bottom, search for "
-                            + "Edge, and add it.")
+                            "Open Control Center, click Edit Controls, search for Edge and add it. "
+                            + "Then the menu bar icon can be hidden.")
                 return
             }
             self.prefersHiddenIcon = true
             self.statusItem.isVisible = false
             self.startReachabilityChecks()
-            self.notify("Edge is in Control Center now",
-                        "Turn it on there, or off to quit it. For this menu, open Edge again "
-                        + "from Applications or Spotlight — that also brings the icon back.\n\n"
-                        + "If Edge is ever removed from Control Center, the icon comes back on "
-                        + "its own.")
+            self.notify("Menu bar icon hidden",
+                        "Use the Edge switch in Control Center: on starts Edge, off quits it. "
+                        + "To get this menu back, open Edge from Applications.")
         }
     }
 
@@ -1333,7 +1352,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
         guard let executable = Bundle.main.executableURL else {
-            notify("Cannot start", "Edge could not find its own binary.")
+            notify("Edge could not start", "Reinstall Edge, then try again.")
             return
         }
 
@@ -1342,7 +1361,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             FileManager.default.createFile(atPath: logURL.path, contents: Data())
         }
         guard let log = try? FileHandle(forWritingTo: logURL) else {
-            notify("Cannot start", "Could not open \(logURL.lastPathComponent).")
+            notify("Edge could not start", "It could not open its log file, \(logURL.lastPathComponent).")
             return
         }
         log.seekToEndOfFile()
@@ -1350,8 +1369,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         if let other = RuntimeState.existing(mode.runtimeRole) {
             let alert = NSAlert()
-            alert.messageText = "Already running"
-            alert.informativeText = "Two sessions at once makes the pointer lag."
+            alert.messageText = "Edge is already running on this Mac"
+            alert.informativeText = "Another Edge session, perhaps one started in Terminal, is "
+                + "running. Two at once make the pointer lag."
             alert.addButton(withTitle: "Take over")
             alert.addButton(withTitle: "Leave it")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -1388,7 +1408,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                         Log.warn("the listener exited (status \(finished.terminationStatus)); starting it again")
                         self.scheduleAutoStart(after: 3)
                     } else {
-                        self.notify("Edge stopped", "Help ▸ Open log says why.")
+                        self.notify("Edge stopped unexpectedly",
+                                    "Choose Start to try again. Help ▸ Open log shows what happened.")
                     }
                 }
                 self.refresh()
@@ -1400,7 +1421,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             session = process
             setupCompleted = true
         } catch {
-            notify("Could not start", error.localizedDescription)
+            notify("Edge could not start", error.localizedDescription)
         }
         refresh()
     }

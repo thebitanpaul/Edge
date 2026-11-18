@@ -59,7 +59,10 @@ public final class EventTap {
             .scrollWheel,
             .keyDown, .keyUp, .flagsChanged,
         ]
-        return types.reduce(CGEventMask(0)) { $0 | (1 << CGEventMask($1.rawValue)) }
+        // Volume, playback and brightness keys arrive as system-defined events.
+        return types.reduce(CGEventMask(1) << CGEventMask(MediaKey.eventType)) {
+            $0 | (1 << CGEventMask($1.rawValue))
+        }
     }
 
     /// Where the tap was actually installed. `.cgSessionEventTap` means the HID level was
@@ -129,11 +132,6 @@ public final class EventTap {
     public func setEnabled(_ enabled: Bool) {
         guard let port else { return }
         CGEvent.tapEnable(tap: port, enable: enabled)
-    }
-
-    public var isEnabled: Bool {
-        guard let port else { return false }
-        return CGEvent.tapIsEnabled(tap: port)
     }
 
     public func stop() {
@@ -408,11 +406,6 @@ public enum LocalPointer {
     public static func hold(at point: ScreenPoint) {
         CGWarpMouseCursorPosition(CGPoint(x: point.x, y: point.y))
         CGAssociateMouseAndMouseCursorPosition(0)
-    }
-
-    @discardableResult
-    public static func reattachToHardware() -> Bool {
-        CGAssociateMouseAndMouseCursorPosition(1) == .success
     }
 
     /// Removes the quarter-second deafness that normally follows a warp.

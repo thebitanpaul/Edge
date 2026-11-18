@@ -66,12 +66,13 @@ public enum ScreenEdge: String, Codable, CaseIterable, Sendable {
 
     public var isHorizontal: Bool { self == .left || self == .right }
 
-    public var opposite: ScreenEdge {
+    /// Where the other Mac sits, as a person would say it: "to the left", "above".
+    public var phrase: String {
         switch self {
-        case .left: return .right
-        case .right: return .left
-        case .top: return .bottom
-        case .bottom: return .top
+        case .left:   return "to the left"
+        case .right:  return "to the right"
+        case .top:    return "above"
+        case .bottom: return "below"
         }
     }
 
@@ -290,10 +291,6 @@ public struct ScreenLayout: Sendable {
         case .top:    entry.y = remoteVirtual.maxY - inset
         }
         return clampToRemote(virtual: entry)
-    }
-
-    public func isReturningToLocal(virtual p: ScreenPoint, delta: ScreenPoint) -> Bool {
-        isPastReturnEdge(virtual: p) && outwardComponent(of: delta) < 0
     }
 
     /// Where the pointer should reappear on this Mac, in this Mac's own coordinates.

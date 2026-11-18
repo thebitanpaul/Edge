@@ -140,10 +140,10 @@ public final class SecureLink {
                 return "the other Mac does not recognise this pairing key.\n"
                     + "  · if it was already running when you paired, restart it over there —\n"
                     + "    a session reads the keys it will accept when it starts\n"
-                    + "  · otherwise the two Macs were paired with different codes; compare the\n"
-                    + "    key shown by `edge troubleshoot` on each"
+                    + "  · otherwise the two Macs hold different pairings; pair them again\n"
+                    + "    (Devices ▸ Connect to a nearby Mac…)"
             }
-            return "TLS handshake failed (OSStatus \(status)) — the two Macs may not share the same pairing code"
+            return "TLS handshake failed (OSStatus \(status)) — the two Macs may hold different pairings; pair them again"
         }
         if case .posix(let code) = error {
             switch code {
@@ -175,7 +175,14 @@ public final class SecureLink {
         timeoutWork = nil
         connection.stateUpdateHandler = nil
         connection.cancel()
-        onClose?(error)
+        let closed = onClose
+        // Callers' handlers routinely capture the link itself. Released here, a closed link
+        // and everything those handlers hold go away with it; kept, every reconnection
+        // attempt while the other Mac is unreachable leaked one link and its helpers.
+        onReady = nil
+        onMessage = nil
+        onClose = nil
+        closed?(error)
     }
 
     private func armTimeout() {

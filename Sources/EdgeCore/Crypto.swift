@@ -10,8 +10,6 @@ public enum Crypto {
     public static let pskSalt  = Data("edge/v1/psk".utf8)
     public static let authSalt = Data("edge/v1/auth".utf8)
     /// PSK identity hint sent in the TLS handshake. Deliberately carries no device information.
-    public static let pskIdentity = Data("edge/v1".utf8)
-
     public static func randomBytes(_ count: Int) -> Data {
         var d = Data(count: count)
         let status = d.withUnsafeMutableBytes { buf -> Int32 in
@@ -60,11 +58,6 @@ public enum Crypto {
         var diff: UInt8 = 0
         for i in 0..<a.count { diff |= a[a.startIndex + i] ^ b[b.startIndex + i] }
         return diff == 0
-    }
-
-    public static func fingerprint(_ data: Data) -> String {
-        let digest = SHA256.hash(data: data)
-        return digest.prefix(4).map { String(format: "%02X", $0) }.joined(separator: ":")
     }
 }
 

@@ -41,7 +41,9 @@ public final class Heartbeat {
 
     public func start() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: interval)
+        // Leeway costs nothing in accuracy: the round trip is measured from timestamps the
+        // ping carries, not from when this fired.
+        timer.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(200))
         timer.setEventHandler { [weak self] in self?.tick() }
         self.timer = timer
         timer.resume()

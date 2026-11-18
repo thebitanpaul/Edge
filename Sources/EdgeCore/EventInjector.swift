@@ -119,6 +119,14 @@ public final class EventInjector {
         lock.unlock()
     }
 
+    /// Volume, playback and brightness, as the keyboard over there would have sent them.
+    ///
+    /// Not tracked for `releaseEverything`: each press is a self-contained down and up, and
+    /// nothing is left half-done if the link drops between the two.
+    public func mediaKey(_ key: MediaKey) {
+        key.makeEvent()?.post(tap: .cghidEventTap)
+    }
+
     /// Mirrors a modifier change. Some apps watch `flagsChanged` directly rather than reading
     /// the flags off each key event, so the event itself has to exist.
     public func changeFlags(_ rawFlags: UInt64, keyCode: UInt16 = 0) {
@@ -182,10 +190,5 @@ public final class EventInjector {
             Log.info("released \(buttons.count) button(s) and \(keys.count) key(s) left held by the dropped link")
         }
         changeFlags(0)
-    }
-
-    public var isHoldingAnything: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return heldKeys.isEmpty == false || heldButtons.contains { $0.value }
     }
 }

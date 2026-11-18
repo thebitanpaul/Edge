@@ -11,11 +11,11 @@ let usage = """
   On \(Style.bold("both")) Macs, once:
       edge pair nearby             \(Style.dim("# compare the six digits, confirm on both"))
 
-  On the Mac that will \(Style.bold("lend its screen")):
+  On the \(Style.bold("secondary")) — the Mac you will control:
       edge listen
 
-  On the Mac with the \(Style.bold("keyboard and mouse")):
-      edge connect                 \(Style.dim("# no argument needed with one pairing")))
+  On the \(Style.bold("primary")) — the Mac with the keyboard and mouse:
+      edge connect                 \(Style.dim("# no argument needed with one pairing"))
 
   Then push the pointer off the edge of your screen towards the other Mac.
   Hold \(Style.bold("⌘ ⌥ ⌃ ⇧")) together to bring it straight back at any time.
@@ -40,9 +40,9 @@ let usage = """
   menubar                 Run the menu-bar front end (also what double-clicking does)
   status                  What is running right now, and where the pointer is
   troubleshoot            Work out why the two Macs are not talking
-  controls                Check Edge's Control Center controls are set up
-  service install <ROLE>  Start at login as `listen` or `connect`
-  service start|stop      Control the login item
+  controls                Check the Edge switch in Control Center is set up
+  service install <ROLE>  Run headless at login (launch agent) as `listen` or `connect`
+  service start|stop      Control the launch agent
   service uninstall       Remove it
 
   layout                  Show how both Macs' screens combine into one desktop
@@ -59,6 +59,7 @@ let usage = """
   --pair <LABEL>          Which pairing to dial with, when more than one exists
   --alignment <MODE>      proportional | start | center | end (layout set)
   --keys                  Also exercise keyboard injection in the test commands
+  --media                 Also nudge the volume up and back down (inject-test)
   --force                 Listen even without Accessibility granted
   --port <N>              TCP port (default 52777)
   --duration <SECONDS>    Hold a connection for a fixed time, then exit
@@ -144,7 +145,7 @@ func runConfig(_ args: Args) throws {
             config.logLevel = value.lowercased()
         default:
             throw EdgeError.invalidArgument(
-                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment, edgePressure, clipboardSharing, fileSharing, preferredLink or logLevel")
+                "unknown config key '\(key)' — try port, requireLocalNetwork, bonjourEnabled, remoteEdge, remoteAlignment, edgePressure, clipboardSharing, clipboardImages, clipboardLimit, fileSharing, revealReceivedFiles, preferredLink, holdLocalPointer or logLevel")
         }
         try config.save()
         ok("\(key) = \(value)")

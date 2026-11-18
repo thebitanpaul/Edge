@@ -25,8 +25,11 @@ public struct Capabilities: OptionSet, Sendable {
     public static let scroll    = Capabilities(rawValue: 1 << 2)
     public static let clipboard = Capabilities(rawValue: 1 << 3)
     public static let files     = Capabilities(rawValue: 1 << 4)
+    /// Volume, playback and brightness keys. A capability rather than an assumption: a Mac
+    /// on an older build would drop the link on a message type it has never heard of.
+    public static let mediaKeys = Capabilities(rawValue: 1 << 5)
 
-    public static let baseline: Capabilities = [.pointer, .keyboard, .scroll]
+    public static let baseline: Capabilities = [.pointer, .keyboard, .scroll, .mediaKeys]
 }
 
 public enum MessageType: UInt8, Sendable {
@@ -48,6 +51,7 @@ public enum MessageType: UInt8, Sendable {
     // keyboard
     case keyEvent     = 0x20
     case flagsChanged = 0x21
+    case mediaKey     = 0x22
     // display
     case screenInfo   = 0x30
     // optional extras (M5)
@@ -116,6 +120,8 @@ public enum Message: Sendable {
 
     case keyEvent(keyCode: UInt16, down: Bool, isRepeat: Bool, flags: UInt64)
     case flagsChanged(flags: UInt64)
+    /// A volume, playback or brightness key — see `MediaKey`.
+    case mediaKey(key: UInt8, down: Bool, isRepeat: Bool)
 
     case screenInfo(displays: [Display])
     case clipboard(kind: String, payload: Data)
@@ -160,6 +166,7 @@ public enum Message: Sendable {
         case .scroll:       return .scroll
         case .keyEvent:     return .keyEvent
         case .flagsChanged: return .flagsChanged
+        case .mediaKey:     return .mediaKey
         case .screenInfo:   return .screenInfo
         case .clipboard:    return .clipboard
         case .fileOffer:    return .fileOffer
@@ -232,6 +239,9 @@ public enum Codec {
 
         case let .flagsChanged(flags):
             w.u64(flags)
+
+        case let .mediaKey(key, down, isRepeat):
+            w.u8(key); w.bool(down); w.bool(isRepeat)
 
         case let .screenInfo(displays):
             w.u8(UInt8(min(displays.count, 255)))
@@ -329,6 +339,9 @@ public enum Codec {
 
             case .flagsChanged:
                 return .flagsChanged(flags: try r.u64())
+
+            case .mediaKey:
+                return .mediaKey(key: try r.u8(), down: try r.bool(), isRepeat: try r.bool())
 
             case .screenInfo:
                 let n = Int(try r.u8())

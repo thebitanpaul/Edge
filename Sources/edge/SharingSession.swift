@@ -55,7 +55,7 @@ final class SharingSession {
     /// At 10 Hz a sampler cannot distinguish a cursor that never moved from one that a timer
     /// keeps putting back, which is how the previous diagnosis went wrong. 1 ms can.
     private var driftTimer: DispatchSourceTimer?
-    private var activity: NSObjectProtocol?
+    private let activity = SessionActivity(reason: "forwarding keyboard and pointer input to another Mac")
     private let holdQueue = DispatchQueue(label: "app.edge.cursor-hold")
     /// Files found on the drag pasteboard as the pointer left, waiting to be sent.
     private var pendingDragFiles: [URL] = []
@@ -82,6 +82,8 @@ final class SharingSession {
     /// Whether the other Mac said it would accept them. Until it has, a file drag stops at
     /// the edge exactly as a window drag does — better than crossing into silence.
     var peerAcceptsFiles = false
+    /// Whether the other Mac's build understands media keys. Until it says so they stay here.
+    var peerAcceptsMediaKeys = false
 
     init(config: Config, remoteName: String) {
         self.config = config
@@ -107,9 +109,13 @@ final class SharingSession {
         // throttles it and coalesces its timers — which arrives as a visibly laggy pointer on
         // the other Mac. This is the documented way to opt out, and it is the difference
         // between the two front ends feeling the same.
-        activity = ProcessInfo.processInfo.beginActivity(
-            options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
-            reason: "forwarding keyboard and pointer input to another Mac")
+        //
+        // The primary never keeps the system awake: it is the Mac in front of you, and your
+        // own keyboard and mouse already count as activity — including while they drive the
+        // other Mac. Latency-critical only while linked; see `SessionActivity`.
+        activity.update(linked: false)
+        // Nothing to forward to until a link is attached; see `attach`.
+        tap.setEnabled(false)
 
         LocalPointer.installCrashSafety()
         // Ask for background cursor control once, up front, so a failure is reported at
@@ -126,18 +132,24 @@ final class SharingSession {
         returnToLocal(reason: "stopping")
         tap?.stop()
         tap = nil
-        if let activity {
-            ProcessInfo.processInfo.endActivity(activity)
-            self.activity = nil
-        }
+        activity.end()
     }
 
+    /// The tap stays installed for the session's life but only runs while there is a link.
+    ///
+    /// With no link it has nothing to do except pass every event straight back — and it sits
+    /// on the main run loop, so while that thread is busy (looking for the other Mac between
+    /// reconnection attempts, say) every local click and keystroke waited on it. Disabled, the
+    /// events never come here at all; re-enabling the same tap cannot fail the way creating a
+    /// new one can.
     func attach(link: SecureLink, layout: ScreenLayout?) {
         lock.lock()
         self.link = link
         if let layout { router.layout = layout }
         lastHeardFrom = Date()
         lock.unlock()
+        tap?.setEnabled(true)
+        activity.update(linked: true)
     }
 
     /// A monitor just moved between the two Macs, or a display was rearranged.
@@ -160,32 +172,27 @@ final class SharingSession {
     func detach(reason: String) {
         returnToLocal(reason: reason)
         lock.lock(); link = nil; lock.unlock()
+        tap?.setEnabled(false)
+        activity.update(linked: false)
     }
 
-    /// Called from the run loop, about ten times a second.
+    private var lastLivenessCheck = Date.distantPast
+
+    /// Called from the run loop — after every event it handles, as well as on its own timeout,
+    /// so it throttles itself rather than doing this per keystroke.
+    ///
+    /// Only the silence check lives here. The cursor's drift is measured by the drift timer
+    /// while the pointer is away; reading the pointer here too was a second window-server
+    /// round trip per input event, measuring the same thing.
     func checkLiveness() {
+        let now = Date()
+        guard now.timeIntervalSince(lastLivenessCheck) >= 0.25 else { return }
+        lastLivenessCheck = now
+
         lock.lock()
-        let remote = router.isRemote
-        let stale = remote && Date().timeIntervalSince(lastHeardFrom) > Self.silenceTimeout
-        let parked = parkedAt
+        let stale = router.isRemote && now.timeIntervalSince(lastHeardFrom) > Self.silenceTimeout
         lock.unlock()
-
-        if stale {
-            returnToLocal(reason: "the other Mac stopped responding")
-            return
-        }
-
-        // Measure rather than correct. If the cursor is straying, that is worth knowing
-        // precisely; correcting it from here was what masked the real problem.
-        guard remote, let parked else { return }
-        let actual = LocalPointer.liveLocation
-        let drift = abs(actual.x - parked.x) + abs(actual.y - parked.y)
-        if drift > maxDrift {
-            lock.lock(); maxDrift = drift; lock.unlock()
-            if drift > 4 {
-                Log.warn(String(format: "this Mac's cursor has strayed %.0fpx from where it was parked", drift))
-            }
-        }
+        if stale { returnToLocal(reason: "the other Mac stopped responding") }
     }
 
     var isRemote: Bool { lock.lock(); defer { lock.unlock() }; return router.isRemote }
@@ -230,6 +237,14 @@ final class SharingSession {
         // No link or no known arrangement: never swallow anything.
         guard haveLayout, let currentLink else { return event }
 
+        // Volume, playback and brightness go wherever the keyboard is typing. Every other
+        // system-defined event — the power button among them — stays on this Mac.
+        if type.rawValue == MediaKey.eventType {
+            guard remote, peerAcceptsMediaKeys, let key = MediaKey(event) else { return event }
+            currentLink.send(.mediaKey(key: key.key, down: key.down, isRepeat: key.isRepeat))
+            return nil
+        }
+
         // A held button means a drag is in progress on this Mac. Crossing mid-drag strands
         // whatever you were dragging, so note the state and let the router refuse.
         switch type {
@@ -265,7 +280,10 @@ final class SharingSession {
             // A drag leaning on the shared edge: if it is carrying files, let it through.
             // Window drags and text selections still stop at the edge, which is what you
             // want — only files have anywhere to go on the other Mac.
-            if !remote { considerFileDrag(at: location) }
+            // Only a drag can carry files, so plain movement — nearly all of it — skips this.
+            if !remote, type != .mouseMoved, filesEnabled, peerAcceptsFiles {
+                considerFileDrag(at: location)
+            }
             lock.lock()
             let decision = router.pointerMoved(localLocation: location, delta: event.pointerDelta)
             lock.unlock()

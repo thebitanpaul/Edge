@@ -187,9 +187,6 @@ public final class ClipboardBridge {
     private let send: @Sendable (Message) -> Void
     private let lock = NSLock()
 
-    /// Reported in the menu and the status line.
-    public private(set) var sentCount = 0
-    public private(set) var receivedCount = 0
     public var onActivity: ((String) -> Void)?
 
     public init(config: Config, send: @escaping @Sendable (Message) -> Void) {
@@ -215,7 +212,6 @@ public final class ClipboardBridge {
         sync.onLocalChange = { [weak self] contents in
             guard let self else { return }
             self.send(.clipboard(kind: "edge/v1", payload: contents.encoded()))
-            self.lock.lock(); self.sentCount += 1; self.lock.unlock()
             self.onActivity?("sent \(contents.summary)")
         }
         sync.start()
@@ -241,7 +237,6 @@ public final class ClipboardBridge {
         do {
             let contents = try ClipboardContents.decode(payload, limit: limit)
             sync.apply(contents)
-            lock.lock(); receivedCount += 1; lock.unlock()
             onActivity?("received \(contents.summary)")
         } catch {
             Log.warn("could not read the other Mac's clipboard: \(error.localizedDescription)")

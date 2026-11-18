@@ -45,7 +45,7 @@ struct ControlStateTests {
     @Test("the peer is named only while connected")
     func subtitles() {
         #expect(state(connected: true).subtitle == "On · Work Mac")
-        #expect(state(connected: true, away: true).subtitle == "On Work Mac")
+        #expect(state(connected: true, away: true).subtitle == "Pointer on Work Mac")
         #expect(state().subtitle == "Connecting…")
         #expect(state(primary: false).subtitle == "Ready")
         #expect(state(running: false).subtitle == "Off")

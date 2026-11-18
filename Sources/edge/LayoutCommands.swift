@@ -29,7 +29,7 @@ extension Commands {
                 config.remoteAlignment = alignment.rawValue
             }
             try config.save()
-            ok("the other Mac is to the \(config.remoteEdge), aligned \(config.remoteAlignment)")
+            ok("the other Mac is \(config.edge.phrase), aligned \(config.remoteAlignment)")
             out()
         }
 
@@ -59,7 +59,7 @@ extension Commands {
                                             edge: config.edge,
                                             alignment: config.alignment) else { continue }
             let name = pairing.peerName ?? pairing.label
-            out(Style.bold("Combined desktop  —  \(name) is to the \(config.remoteEdge)"))
+            out(Style.bold("Combined desktop  —  \(name) is \(config.edge.phrase)"))
             out(Style.dim("  as of \(relativeTime(pairing.lastSeenAt))"))
             out()
             out(layout.diagram(localName: "this Mac", remoteName: name))
@@ -92,7 +92,7 @@ extension Commands {
 
         out(Style.bold("Permissions"))
         if ax.isGranted { ok("Accessibility: granted") } else { bad("Accessibility: \(ax)") }
-        if im.isGranted { ok("Input Monitoring: granted") } else { warn("Input Monitoring: \(im)  (needed from milestone 3)") }
+        if im.isGranted { ok("Input Monitoring: granted") } else { warn("Input Monitoring: \(im)  (needed on the primary)") }
         out()
 
         if Permissions.isRunningInsideAppBundle {
@@ -183,12 +183,23 @@ extension Commands {
             out()
             warn("typing a test string in 3 seconds — click into a text field now")
             Thread.sleep(forTimeInterval: 3)
-            injector.type("Edge M2 injection works.")
+            injector.type("Edge typing test works.")
             ok("typed a test string")
         } else {
             out()
             info("keyboard injection not exercised — it would type into whatever is focused.")
             info("run `edge inject-test --keys` with a text editor focused to try it.")
+        }
+
+        if args.bool("media") {
+            out()
+            info("volume up one step, then back down — the volume overlay should appear twice")
+            for key: UInt8 in [0, 1] {   // sound up, sound down
+                injector.mediaKey(MediaKey(key: key, down: true, isRepeat: false))
+                injector.mediaKey(MediaKey(key: key, down: false, isRepeat: false))
+                Thread.sleep(forTimeInterval: 0.6)
+            }
+            ok("media keys posted")
         }
 
         injector.move(to: start)
@@ -459,11 +470,11 @@ extension Commands {
         let entry = layout.entryPoint(leavingLocalAt: ScreenPoint(x: layout.localBounds.maxX - 1,
                                                                  y: layout.localBounds.midY))
         link.send(.mouseMove(x: Int32(entry.x), y: Int32(entry.y), dx: 0, dy: 0))
-        info("pointer parked at \(entry) — where it will arrive in milestone 3")
+        info("pointer parked at \(entry) — where it arrives when it crosses from this Mac")
         link.send(.leaveScreen)
         Thread.sleep(forTimeInterval: 0.3)
         link.close(reason: "remote-test finished")
         out()
-        ok("milestone 2 verified: this Mac drove the other Mac's pointer")
+        ok("remote control works: this Mac drove the other Mac's pointer")
     }
 }

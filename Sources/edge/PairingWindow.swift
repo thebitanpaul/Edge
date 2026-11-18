@@ -18,7 +18,7 @@ import EdgeCore
 /// worst way for a thing to not work. Pairing once over Wi-Fi costs nothing and always works;
 /// the cable then carries the actual link, which is where its speed matters and where it is
 /// entirely dependable.
-final class PairingWindowController: NSWindowController {
+final class PairingWindowController: NSWindowController, NSWindowDelegate {
 
     private enum Stage {
         case searching
@@ -50,10 +50,18 @@ final class PairingWindowController: NSWindowController {
         window.title = "Connect to a nearby Mac"
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        window.delegate = self
         build()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The title bar's close button closes the window directly, never calling `close()`
+    /// below — which left pairing advertising and listening for its full three minutes.
+    func windowWillClose(_ notification: Notification) {
+        session?.cancel()
+        session = nil
+    }
 
     // MARK: - Layout
 
@@ -126,7 +134,8 @@ final class PairingWindowController: NSWindowController {
         case let .verify(digits, peer):
             stage = .verifying(digits: digits, peer: peer)
         case let .failed(reason):
-            stage = .failed(reason)
+            // The same reasons the terminal prints, which start in lower case; a sentence here.
+            stage = .failed(reason.prefix(1).uppercased() + reason.dropFirst())
         case let .done(outcome):
             onPaired?(outcome)
             close()
@@ -146,8 +155,8 @@ final class PairingWindowController: NSWindowController {
             spinner.isHidden = false
             spinner.startAnimation(nil)
             title.stringValue = "Looking for the other Mac"
-            detail.stringValue = "Choose this on the other Mac too.\n"
-                + "Both need the same Wi-Fi network."
+            detail.stringValue = "On the other Mac, choose Connect to a nearby Mac… too.\n"
+                + "Both need to be on the same network."
             primaryButton.title = "Search again"
             primaryButton.isEnabled = true
             secondaryButton.title = "Cancel"
@@ -205,7 +214,7 @@ final class PairingWindowController: NSWindowController {
         case .verifying:
             session?.confirm(false)
             stage = .failed("The numbers did not match. Try again; if they differ every time, "
-                            + "something is between the two Macs.")
+                            + "something on this network may be interfering — try another network.")
             render()
         default:
             session?.cancel()

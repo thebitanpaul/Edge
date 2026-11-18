@@ -91,6 +91,7 @@ final class ArrangementView: NSView {
 final class ArrangementWindowController: NSWindowController {
     private let view = ArrangementView()
     private var note: NSTextField!
+    private var alignmentPopup: NSPopUpButton!
     private var startButton: NSButton!
     private let isEditable: Bool
 
@@ -144,9 +145,8 @@ final class ArrangementWindowController: NSWindowController {
         // here rather than in the menu: next to a picture that shows whether it looks right.
         let alignment = NSPopUpButton(frame: NSRect(x: 110, y: 62, width: 300, height: 22),
                                       pullsDown: false)
-        alignment.addItems(withTitles: ArrangementWindowController.alignmentTitles.map(\.1))
-        alignment.selectItem(at: ArrangementWindowController.alignmentTitles
-            .firstIndex { $0.0 == config.alignment } ?? 0)
+        alignmentPopup = alignment
+        fillAlignmentChoices(for: config)
         alignment.target = self
         alignment.action = #selector(alignmentChanged(_:))
         alignment.isEnabled = isEditable
@@ -172,17 +172,29 @@ final class ArrangementWindowController: NSWindowController {
         if !wasRunning { onStart?() }
     }
 
-    static let alignmentTitles: [(ScreenAlignment, String)] = [
-        (.proportional, "Stretch to fit"),
-        (.start, "Line up the tops"),
-        (.center, "Line up the middles"),
-        (.end, "Line up the bottoms"),
-    ]
+    /// Worded for the edge chosen: beside each other the screens line up by their tops and
+    /// bottoms, above or below each other by their left and right sides.
+    static func alignmentTitles(for edge: ScreenEdge) -> [(ScreenAlignment, String)] {
+        let sideBySide = edge == .left || edge == .right
+        return [
+            (.proportional, "Stretch to fit"),
+            (.start, sideBySide ? "Line up the tops" : "Line up the left sides"),
+            (.center, sideBySide ? "Line up the middles" : "Line up the centres"),
+            (.end, sideBySide ? "Line up the bottoms" : "Line up the right sides"),
+        ]
+    }
+
+    private func fillAlignmentChoices(for config: Config) {
+        let choices = Self.alignmentTitles(for: config.edge)
+        alignmentPopup.removeAllItems()
+        alignmentPopup.addItems(withTitles: choices.map(\.1))
+        alignmentPopup.selectItem(at: choices.firstIndex { $0.0 == config.alignment } ?? 0)
+    }
 
     @objc private func alignmentChanged(_ sender: NSPopUpButton) {
-        let choices = Self.alignmentTitles
-        guard sender.indexOfSelectedItem >= 0, sender.indexOfSelectedItem < choices.count else { return }
         var config = (try? Config.load()) ?? Config()
+        let choices = Self.alignmentTitles(for: config.edge)
+        guard sender.indexOfSelectedItem >= 0, sender.indexOfSelectedItem < choices.count else { return }
         config.remoteAlignment = choices[sender.indexOfSelectedItem].0.rawValue
         try? config.save()
         onEdgeChanged?()
@@ -195,6 +207,7 @@ final class ArrangementWindowController: NSWindowController {
         var config = (try? Config.load()) ?? Config()
         config.remoteEdge = edges[sender.selectedSegment].rawValue
         try? config.save()
+        fillAlignmentChoices(for: config)
         onEdgeChanged?()
         reload()
     }
@@ -236,10 +249,12 @@ final class ArrangementWindowController: NSWindowController {
         } else if known == nil {
             note.stringValue = "Its screen is a stand-in until the two Macs connect"
         } else {
-            note.stringValue = "\(local.count) screen(s) here, \(remote.count) there"
+            note.stringValue = "\(Self.screens(local.count)) here, \(Self.screens(remote.count)) there"
         }
         view.needsDisplay = true
     }
+
+    private static func screens(_ n: Int) -> String { n == 1 ? "1 screen" : "\(n) screens" }
 
     /// One screen the size of this Mac's main one, for a Mac whose screens are not known yet.
     private static func standInScreen(for local: [Display]) -> [Display] {

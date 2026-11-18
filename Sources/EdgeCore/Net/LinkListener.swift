@@ -43,7 +43,9 @@ public final class LinkListener {
 
     public var onListening: ((UInt16) -> Void)?
     public var onLinkReady: ((SecureLink, PeerInfo) -> Void)?
-    public var onLinkClosed: ((PeerInfo?, Error?) -> Void)?
+    /// Which link closed, by identity, so a late close from a link that has already been
+    /// replaced can be told apart from the current one going down.
+    public var onLinkClosed: ((ObjectIdentifier, PeerInfo?, Error?) -> Void)?
     public var onRejected: ((String, String) -> Void)?
     public var onFailure: ((Error) -> Void)?
 
@@ -178,7 +180,7 @@ public final class LinkListener {
                 // dialling a Bonjour name opens several candidate connections and drops the
                 // ones that lose the race. Reporting each as a failure would be pure noise.
                 if let peer = link?.peer {
-                    self.onLinkClosed?(peer, error)
+                    self.onLinkClosed?(token, peer, error)
                 } else if let error {
                     Log.debug("discarded an unestablished connection from \(described): \(error.localizedDescription)")
                 }

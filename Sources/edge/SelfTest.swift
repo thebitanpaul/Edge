@@ -185,7 +185,7 @@ extension Commands {
         let failed = checks.filter { !$0.passed }
         if failed.isEmpty {
             out(Style.green(Style.bold("  All \(checks.count) checks passed.")))
-            out(Style.dim("  Milestone 1 is working on this Mac. Pair it with the other one next."))
+            out(Style.dim("  Edge works on this Mac. Pair it with the other one next."))
         } else {
             out(Style.red(Style.bold("  \(failed.count) of \(checks.count) checks failed:")))
             for f in failed { out("    · \(f.name) — \(f.detail)") }
