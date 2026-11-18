@@ -36,7 +36,7 @@ for f in "${ASSETS[@]}"; do
 done
 
 # Refuse to publish something the users' Macs would not recognise as the same app.
-if ! codesign -dvv "$APP" 2>&1 | grep -q "Authority=Edge Local Signing"; then
+if ! codesign -dvv "$APP" 2>&1 | grep -F "Authority=Edge Local Signing" >/dev/null; then
   echo "build/Edge.app is not signed with \"Edge Local Signing\" (the build fell back to ad-hoc)." >&2
   echo "Publishing it would make every user grant permissions again. Fix signing and rebuild." >&2
   exit 1
