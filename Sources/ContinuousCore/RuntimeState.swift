@@ -27,6 +27,12 @@ public struct RuntimeState: Codable, Sendable {
     public var rttMillis: Double?
     /// Whether clipboard sharing actually negotiated on, as opposed to being configured on.
     public var clipboardActive: Bool = false
+    /// Which link this session is actually using — "cable, 169.254.x.y" or similar.
+    ///
+    /// Worth publishing because the commonest surprise in this app is a connection that
+    /// succeeds over the slow link. Without it, a pointer that drags looks like a bug in the
+    /// forwarding rather than like 200 ms of Wi-Fi.
+    public var via: String?
 
     public init(role: Role, peerName: String? = nil) {
         self.role = role

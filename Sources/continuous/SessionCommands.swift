@@ -264,6 +264,7 @@ extension Commands {
                 if let error { warn(error.localizedDescription) }
                 state.mutate {
                     $0.connected = false
+                    $0.via = nil
                     $0.lastError = error?.localizedDescription
                     $0.save()
                 }
@@ -387,6 +388,7 @@ extension Commands {
             $0.connected = true
             $0.peerName = peer.name
             $0.endpoint = peer.endpoint
+            $0.via = target.via
             $0.lastError = nil
             $0.save()
         }
@@ -470,7 +472,7 @@ extension Commands {
             }
         }
 
-        state.mutate { $0.connected = false; $0.pointerIsRemote = false; $0.save() }
+        state.mutate { $0.connected = false; $0.pointerIsRemote = false; $0.via = nil; $0.save() }
 
         // Only a deliberate stop ends things; anything else is worth reconnecting after.
         if reachedDeadline || Runtime.interrupted {

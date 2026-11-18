@@ -103,7 +103,13 @@ enum Target {
         } else {
             info("looking for any Mac running Continuous…")
         }
-        let seen = Discovery.scan(duration: 3)
+        // Longer than three seconds after the first attempt. A browse started moments after
+        // the other Mac's service went away and came back routinely sees nothing, and an
+        // empty browse is not harmless here: it drops through to the fallbacks below, which
+        // are routed addresses. That is how a session that was on the cable the first time
+        // comes back on Wi-Fi, and a 2 ms link becoming a 200 ms one is felt immediately as
+        // a pointer that drags.
+        let seen = Discovery.scan(duration: attempt == 1 ? 3 : 5)
         if let hit = PeerSelection.choose(from: seen,
                                           boundTo: pairing.peerDeviceID,
                                           excluding: localDeviceID,
@@ -131,6 +137,30 @@ enum Target {
             Log.debug("\(seen.count) Mac(s) advertising, none matching this pairing")
         }
 
+        // A cable address that worked before, ahead of any name.
+        //
+        // The order here is the whole point. A hostname resolves over the routed network, so
+        // reaching for it first means a cable link silently becomes a Wi-Fi one the moment a
+        // browse comes up empty — which it does for a few seconds after either Mac restarts
+        // its session. The connection still succeeds, which is why this was never reported as
+        // a failure, only as "it feels slower than it did the first time".
+        if config.link.prefersCable, let last = pairing.lastEndpoint,
+           NetworkAddress.isCableEndpoint(last) {
+            info("trying \(last), the cable address it answered on last time")
+            return (try LinkConnector.parseEndpoint(last, defaultPort: config.port),
+                    "cable, \(last)")
+        }
+
+        // Everything below this line is a routed address, so none of it will do when a cable
+        // is the only acceptable link. Say so rather than connecting over the wrong one.
+        if config.link.requiresCable {
+            throw ContinuousError.invalidArgument("""
+                '\(pairing.label)' is set to connect over a cable, and no cable was found.
+                  · check the USB-C or Thunderbolt cable between the two Macs
+                  · or allow any link:  menu bar ▸ Connect over ▸ Whichever connects
+                """)
+        }
+
         // mDNS *name* resolution usually survives where browsing does not, because it is an
         // ordinary hostname lookup rather than a service enumeration.
         if let host = pairing.peerHostName ?? pairing.peerName.map(Identity.mdnsName(from:)),
@@ -138,7 +168,7 @@ enum Target {
             let candidate = host.hasSuffix(".local") ? host : host + ".local"
             info("trying \(candidate)")
             return (try LinkConnector.parseEndpoint(candidate, defaultPort: config.port),
-                    "hostname \(candidate)")
+                    "Wi-Fi, \(candidate)")
         }
 
         if let remembered = pairing.lastEndpoint {
@@ -153,7 +183,7 @@ enum Target {
             could not find '\(pairing.label)' on the network.
               · is the other Mac started, and set to the opposite role?
               · Bonjour is blocked on many managed networks. Set the other Mac's address:
-                    menu bar ▸ Devices ▸ \(pairing.label) ▸ Set address…
+                    menu bar ▸ Devices ▸ \(pairing.label) ▸ Set address
                     continuous connect <address> --pair "\(pairing.label)"
               · `continuous discover` shows what is visible from here
             """)

@@ -521,6 +521,22 @@ struct PrivateAddressTests {
         #expect(!NetworkAddress.isLoopback(nil))
     }
 
+    /// Guards the ordering that decides which link a reconnection lands on: a remembered
+    /// cable address is tried ahead of any hostname, and a hostname can only ever be the
+    /// routed network. Mistaking one for the other is how a 2 ms link quietly became 200 ms.
+    @Test("a remembered endpoint is recognised as a cable, port and brackets or not")
+    func cableEndpoints() {
+        #expect(NetworkAddress.isCableEndpoint("169.254.3.4"))
+        #expect(NetworkAddress.isCableEndpoint("169.254.3.4:52777"))
+        #expect(!NetworkAddress.isCableEndpoint("192.168.1.5"))
+        #expect(!NetworkAddress.isCableEndpoint("192.168.1.5:52777"))
+        #expect(!NetworkAddress.isCableEndpoint("work-mac.local:52777"))
+        // An IPv6 literal is never a cable address here: the cable carries a self-assigned
+        // IPv4, and the brackets must not be mistaken for a host:port split.
+        #expect(!NetworkAddress.isCableEndpoint("[fe80::1]:52777"))
+        #expect(!NetworkAddress.isCableEndpoint("fe80::1"))
+    }
+
     @Test("IPv6 endpoints are rendered unambiguously")
     func formatting() {
         #expect(NetworkAddress.describe(endpoint("fe80::1")) == "[fe80::1]:52777")

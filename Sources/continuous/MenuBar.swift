@@ -47,6 +47,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// wrong", and only the transition into a problem is worth announcing.
     private var lastAnnouncedLinkProblem: String??
     private var blinkOn = true
+    /// Pending retry of the secondary's listener, cancelled whenever one starts by any route.
+    private var autoStartWork: DispatchWorkItem?
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
 
@@ -73,6 +75,44 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self?.refresh()
         }
         refresh()
+        autoStartIfSecondary()
+    }
+
+    // MARK: - One Mac drives
+
+    /// The secondary makes itself ready without being asked.
+    ///
+    /// Pressing Start on two Macs to get one pointer was always a thing to remember rather
+    /// than a decision: the secondary has nothing to decide — it waits, and until the primary
+    /// dials there is nothing for it to do. Remote *start* is not possible in the other
+    /// direction, because a Mac that has stopped has nothing left listening to be told; so
+    /// instead the secondary never stops on its own, and the primary's Start and Stop are the
+    /// only two buttons that matter. Stopping the primary closes the link, which the secondary
+    /// sees at once and goes back to waiting.
+    ///
+    /// Stopping the secondary by hand is still honoured — it is remembered, and nothing here
+    /// starts it again until Start is pressed there.
+    private func autoStartIfSecondary() {
+        autoStartWork?.cancel()
+        autoStartWork = nil
+        guard mode == .client, !stoppedByHand, !isRunning else { return }
+        guard !((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty else { return }
+        startSession()
+    }
+
+    /// Tries again shortly. Used when the listener exits on its own — a managed Mac going to
+    /// sleep, say — so it comes back without anyone walking over to it.
+    private func scheduleAutoStart(after delay: TimeInterval) {
+        guard mode == .client, !stoppedByHand else { return }
+        autoStartWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.autoStartIfSecondary() }
+        autoStartWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private var stoppedByHand: Bool {
+        get { UserDefaults.standard.bool(forKey: "stoppedByHand") }
+        set { UserDefaults.standard.set(newValue, forKey: "stoppedByHand") }
     }
 
     // MARK: - State
@@ -98,8 +138,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private var pointerIsAway: Bool { lastKnownState?.pointerIsRemote == true }
 
-    /// Running but not yet connected — the state worth animating.
-    private var isSearching: Bool { isRunning && lastKnownState?.connected != true }
+    /// Searching, as opposed to merely waiting.
+    ///
+    /// Only the primary searches: it is the one dialling, and a blinking icon says "something
+    /// is happening, give it a moment". The secondary does not dial, so for it the same state
+    /// is simply *ready*, and blinking at it for hours was the icon crying wolf.
+    private var isSearching: Bool {
+        mode == .host && isRunning && lastKnownState?.connected != true
+    }
 
     private func refresh() {
         lastKnownState = currentState
@@ -184,7 +230,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         if store.pairings.isEmpty {
             menu.addItem(disabled("Not set up"))
-            menu.addItem(action("Set up…", #selector(runSetup)))
+            menu.addItem(action("Set up", #selector(runSetup)))
             menu.addItem(.separator())
             menu.addItem(action("Quit", #selector(quit)))
             return
@@ -193,17 +239,31 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Status: role first, because everything else in this menu depends on it.
         if !isRunning {
             menu.addItem(disabled("Stopped · \(mode.shortTitle)"))
+            // Worth spelling out on the secondary: the primary has no way to say so, and a
+            // Mac that will not connect is the only symptom.
+            if mode == .client {
+                menu.addItem(disabled("The primary cannot reach this Mac while it is stopped"))
+            }
         } else if let state, state.connected {
             let peer = state.peerName ?? "the other Mac"
             menu.addItem(disabled(mode == .host && state.pointerIsRemote == true
                                   ? "Pointer on \(peer)"
                                   : "\(mode.shortTitle) · connected to \(peer)"))
-            if let rtt = state.rttMillis {
-                menu.addItem(disabled(String(format: "%.0f ms%@", rtt,
-                                             state.clipboardActive ? " · clipboard" : "")))
-            }
+            // Which link, and how fast. A connection that succeeds over the slow link is the
+            // commonest surprise here, and without naming it a dragging pointer reads as a
+            // bug in the forwarding rather than as Wi-Fi.
+            var detail: [String] = []
+            if let via = state.via { detail.append(linkName(via)) }
+            if let rtt = state.rttMillis { detail.append(String(format: "%.0f ms", rtt)) }
+            if state.clipboardActive { detail.append("clipboard") }
+            if !detail.isEmpty { menu.addItem(disabled(detail.joined(separator: " · "))) }
+        } else if mode == .client {
+            // The secondary has nothing to do until the primary dials, and nothing it can do
+            // to hurry that along. "Ready" is the truth; "connecting" was not.
+            menu.addItem(disabled("Secondary · ready"))
+            menu.addItem(disabled("Start it on the primary Mac"))
         } else {
-            menu.addItem(disabled("\(mode.shortTitle) · connecting…"))
+            menu.addItem(disabled("Primary · connecting"))
             menu.addItem(disabled(waitingHint))
         }
 
@@ -239,6 +299,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(login)
 
         menu.addItem(.separator())
+        menu.addItem(action("Reconfigure", #selector(runSetup)))
         menu.addItem(helpMenuItem())
         menu.addItem(action("Quit", #selector(quit)))
     }
@@ -246,15 +307,66 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func helpMenuItem() -> NSMenuItem {
         let item = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
-        // The single way to change roles. A "this Mac is…" switch looked like it worked and
-        // did not: it changed one Mac while the other kept its old role, and left behind an
-        // arrangement describing a relationship that no longer existed.
-        submenu.addItem(action("Set up again…", #selector(runSetup)))
+        submenu.addItem(action("Open log", #selector(openLog)))
+        submenu.addItem(action("Report an issue", #selector(reportIssue)))
         submenu.addItem(.separator())
-        submenu.addItem(action("Open log…", #selector(openLog)))
         submenu.addItem(disabled(Runtime.shortVersion))
         item.submenu = submenu
         return item
+    }
+
+    /// "cable, 169.254.3.2" → "Cable". Enough to answer "why is this slow?" and no more.
+    private func linkName(_ via: String) -> String {
+        let lower = via.lowercased()
+        if lower.hasPrefix("cable") { return "Cable" }
+        if lower.hasPrefix("wi-fi") { return "Wi-Fi" }
+        if lower.hasPrefix("bonjour") || lower.hasPrefix("hostname") { return "Network" }
+        return "Network"
+    }
+
+    /// Opens a mail message to the address below, pre-filled with what a bug report needs.
+    ///
+    /// Falls back to showing the address when nothing on this Mac handles mail — a work Mac
+    /// with no mail client is common, and silently doing nothing is the worst outcome.
+    private static let supportAddress = "thephiuture@gmail.com"
+
+    @objc private func reportIssue() {
+        DispatchQueue.main.async { [weak self] in self?.performReportIssue() }
+    }
+
+    private func performReportIssue() {
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        let body = """
+            What happened:
+
+
+            What you expected:
+
+
+            ---
+            Continuous \(Runtime.shortVersion)
+            \(os)
+            Role: \(mode.shortTitle)
+            """
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = Self.supportAddress
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Continuous \(Runtime.shortVersion) — issue"),
+            URLQueryItem(name: "body", value: body),
+        ]
+        if let url = components.url, NSWorkspace.shared.open(url) { return }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "No mail app is set up"
+        alert.informativeText = "Send the report to \(Self.supportAddress)."
+        alert.addButton(withTitle: "Copy address")
+        alert.addButton(withTitle: "Close")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(Self.supportAddress, forType: .string)
+        }
     }
 
     /// A link preference that cannot currently be satisfied, or nil.
@@ -359,12 +471,43 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
 
-        notify("This Mac is \(chosen.shortTitle)",
-               changed
-                 ? "Set the other Mac to \(chosen.opposite.shortTitle) as well — one of each. "
-                   + "Then press Start on both."
-                 : "Press Start on both Macs.")
+        guard changed else {
+            notify("This Mac is \(chosen.shortTitle)", startingInstruction(for: chosen))
+            autoStartIfSecondary()
+            refresh()
+            return
+        }
+
+        // A role change throws the screen arrangement away, and it has to: it described
+        // where the *other* Mac sat relative to this one, and that sentence is now about a
+        // different pair of screens. Saying so here rather than letting it be discovered the
+        // first time the pointer refuses to cross.
+        if chosen == .host {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "This Mac is now Primary"
+            alert.informativeText =
+                "Set the other Mac to Secondary.\n\n"
+                + "The screen arrangement was reset — say where the other Mac's screen sits "
+                + "before the pointer can cross to it."
+            alert.addButton(withTitle: "Arrange screens")
+            alert.addButton(withTitle: "Later")
+            if alert.runModal() == .alertFirstButtonReturn {
+                performShowArrangement()
+            }
+        } else {
+            notify("This Mac is now Secondary",
+                   "Set the other Mac to Primary and arrange the screens there. "
+                   + "This Mac stays ready on its own.")
+            autoStartIfSecondary()
+        }
         refresh()
+    }
+
+    /// What to press, and where, once the roles are settled.
+    private func startingInstruction(for chosen: Mode) -> String {
+        chosen == .host ? "Press Start here. The other Mac stays ready on its own."
+                        : "This Mac stays ready on its own — press Start on the primary."
     }
 
     /// A short line naming the likeliest reason nothing has connected yet.
@@ -408,8 +551,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         submenu.addItem(.separator())
-        submenu.addItem(action("Connect to a nearby Mac…", #selector(pairNearby)))
-        submenu.addItem(disabled("…choose it on both Macs"))
+        submenu.addItem(action("Connect to a nearby Mac", #selector(pairNearby)))
+        submenu.addItem(disabled("Choose this on both Macs"))
         item.submenu = submenu
         return item
     }
@@ -430,9 +573,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         detail.addItem(.separator())
-        for (title, selector) in [("Rename…", #selector(renameDevice(_:))),
-                                  ("Set address…", #selector(setDeviceAddress(_:))),
-                                  ("Forget…", #selector(forgetDevice(_:)))] {
+        for (title, selector) in [("Rename", #selector(renameDevice(_:))),
+                                  ("Set address", #selector(setDeviceAddress(_:))),
+                                  ("Forget", #selector(forgetDevice(_:)))] {
             let entry = NSMenuItem(title: title, action: selector, keyEquivalent: "")
             entry.target = self
             entry.representedObject = pairing.label
@@ -563,7 +706,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             try store.save()
             restartForPairingChange()
             notify("Paired with \(outcome.peerName)",
-                   "Set the other Mac to \(mode.opposite.shortTitle), then Start on both.")
+                   "Set the other Mac to \(mode.opposite.shortTitle). "
+                   + startingInstruction(for: mode))
+            autoStartIfSecondary()
         } catch {
             notify("Could not save the pairing", error.localizedDescription)
         }
@@ -686,7 +831,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func arrangementMenuItem() -> NSMenuItem {
         // Opens the window. Everything it offers lives there, so a submenu repeating it would
         // be a second place to change the same thing.
-        let item = NSMenuItem(title: "Screen arrangement…", action: #selector(showArrangement),
+        let item = NSMenuItem(title: "Screen arrangement", action: #selector(showArrangement),
                               keyEquivalent: "")
         item.target = self
         return item
@@ -742,7 +887,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - Actions
 
     @objc private func toggleRunning() {
-        isRunning ? stopSession() : startSession()
+        if isRunning {
+            // Remembered, so the secondary's own Stop is not undone a moment later by the
+            // thing that keeps it ready.
+            stoppedByHand = true
+            autoStartWork?.cancel()
+            stopSession()
+        } else {
+            stoppedByHand = false
+            startSession()
+        }
     }
 
     private func setMode(_ chosen: Mode, restart: Bool) {
@@ -761,6 +915,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Editability depends on the role, and the window caches it, so it has to go.
         arrangementWindow?.close()
         arrangementWindow = nil
+
+        // A Stop pressed in the old role says nothing about the new one. Left set, it would
+        // keep a Mac that has just become the secondary from making itself ready.
+        stoppedByHand = false
 
         if restart { startSession() }
         refresh()
@@ -862,8 +1020,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 guard let self else { return }
                 self.session = nil
                 if finished.terminationStatus != 0 && finished.terminationReason != .uncaughtSignal {
-                    self.notify("Continuous stopped",
-                                "The session exited. Open the log from the menu to see why.")
+                    // The secondary is meant to stay ready, so a session that fell over comes
+                    // back by itself rather than needing someone to walk over to that Mac.
+                    if self.mode == .client && !self.stoppedByHand {
+                        Log.warn("the listener exited (status \(finished.terminationStatus)); starting it again")
+                        self.scheduleAutoStart(after: 3)
+                    } else {
+                        self.notify("Continuous stopped",
+                                    "The session exited. Open the log from the menu to see why.")
+                    }
                 }
                 self.refresh()
             }

@@ -170,7 +170,7 @@ final class PairingWindowController: NSWindowController {
             spinner.startAnimation(nil)
             title.stringValue = "Waiting for \(peer)"
             detail.stringValue = "Confirm the same number over there."
-            primaryButton.title = "Waiting…"
+            primaryButton.title = "Waiting"
             primaryButton.isEnabled = false
             secondaryButton.title = "Cancel"
             secondaryButton.isHidden = false

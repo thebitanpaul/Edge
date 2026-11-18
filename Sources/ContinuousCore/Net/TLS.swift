@@ -303,6 +303,17 @@ public enum NetworkAddress {
         address.hasPrefix("169.254.")
     }
 
+    /// True for a remembered endpoint — `host` or `host:port` — that sits on a direct cable.
+    public static func isCableEndpoint(_ endpoint: String) -> Bool {
+        var host = endpoint
+        if host.hasPrefix("["), let close = host.firstIndex(of: "]") {
+            host = String(host[host.index(after: host.startIndex)..<close])
+        } else if host.filter({ $0 == ":" }).count == 1, let colon = host.lastIndex(of: ":") {
+            host = String(host[host.startIndex..<colon])
+        }
+        return isLinkLocalIPv4(host)
+    }
+
     public static func describe(_ endpoint: NWEndpoint?) -> String {
         guard let endpoint else { return "unknown" }
         switch endpoint {
