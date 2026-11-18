@@ -62,3 +62,41 @@ struct MediaKeyTests {
         #expect(!Capabilities([.pointer, .keyboard, .scroll]).contains(.mediaKeys))
     }
 }
+
+@Suite("Swapping roles")
+struct RoleSwitchTests {
+    @Test("the other Mac sits on the mirrored edge")
+    func mirrored() {
+        #expect(ScreenEdge.right.opposite == .left)
+        #expect(ScreenEdge.left.opposite == .right)
+        #expect(ScreenEdge.top.opposite == .bottom)
+        #expect(ScreenEdge.bottom.opposite == .top)
+        for edge in ScreenEdge.allCases { #expect(edge.opposite.opposite == edge) }
+    }
+
+    @Test("the hand-over carries the arrangement intact")
+    func handOverRoundTrip() throws {
+        let frame = Codec.encodeFrame(.switchRoles(edge: "bottom", alignment: "center"))
+        guard case let .switchRoles(edge, alignment) =
+                try Codec.decode(type: frame[4], payload: frame.dropFirst(5)) else {
+            Issue.record("decoded the wrong case"); return
+        }
+        #expect(edge == "bottom")
+        #expect(alignment == "center")
+    }
+
+    @Test("new builds advertise role switching, so older ones are never asked")
+    func capability() {
+        #expect(Capabilities.baseline.contains(.roleSwitch))
+    }
+
+    @Test("a note survives the trip from session to app")
+    func noteCodable() throws {
+        let note = RoleSwitchNote(becomePrimary: true, edge: "left", alignment: "start",
+                                  otherMacFollows: true)
+        let data = try JSONEncoder.edgeJSON.encode(note)
+        let back = try JSONDecoder.edgeJSON.decode(RoleSwitchNote.self, from: data)
+        #expect(back.becomePrimary && back.otherMacFollows)
+        #expect(back.edge == "left" && back.alignment == "start")
+    }
+}

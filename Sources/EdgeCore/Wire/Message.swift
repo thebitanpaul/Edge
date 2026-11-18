@@ -28,8 +28,10 @@ public struct Capabilities: OptionSet, Sendable {
     /// Volume, playback and brightness keys. A capability rather than an assumption: a Mac
     /// on an older build would drop the link on a message type it has never heard of.
     public static let mediaKeys = Capabilities(rawValue: 1 << 5)
+    /// Swapping primary and secondary from either Mac, both changing together.
+    public static let roleSwitch = Capabilities(rawValue: 1 << 6)
 
-    public static let baseline: Capabilities = [.pointer, .keyboard, .scroll, .mediaKeys]
+    public static let baseline: Capabilities = [.pointer, .keyboard, .scroll, .mediaKeys, .roleSwitch]
 }
 
 public enum MessageType: UInt8, Sendable {
@@ -62,6 +64,9 @@ public enum MessageType: UInt8, Sendable {
     case fileEnd      = 0x52
     case fileRequest  = 0x53
     case fileDrop     = 0x54
+    // roles
+    case switchRoles       = 0x60
+    case requestRoleSwitch = 0x61
 }
 
 /// One file in a transfer: what it is called and how big it is.
@@ -148,6 +153,12 @@ public enum Message: Sendable {
     /// crossing. Without it a file appears in Downloads while you are still holding it, which
     /// is a confusing thing to watch: the drop has visibly not happened yet.
     case fileDrop
+    /// Primary to secondary: "you are the primary now; I am the secondary". Carries where this
+    /// Mac sits from the other's point of view, so its arrangement is right from the start.
+    case switchRoles(edge: String, alignment: String)
+    /// Secondary to primary: "swap with me". The primary always drives the swap, because only
+    /// it knows the arrangement to hand over.
+    case requestRoleSwitch
 
     public var type: MessageType {
         switch self {
@@ -174,6 +185,8 @@ public enum Message: Sendable {
         case .fileEnd:      return .fileEnd
         case .fileRequest:  return .fileRequest
         case .fileDrop:     return .fileDrop
+        case .switchRoles:  return .switchRoles
+        case .requestRoleSwitch: return .requestRoleSwitch
         }
     }
 }
@@ -210,7 +223,7 @@ public enum Codec {
         case let .authProof(proof):
             w.blob(proof)
 
-        case .ready, .leaveScreen, .fileRequest, .fileDrop:
+        case .ready, .leaveScreen, .fileRequest, .fileDrop, .requestRoleSwitch:
             break
 
         case let .ping(seq, t), let .pong(seq, t):
@@ -264,6 +277,9 @@ public enum Codec {
 
         case let .fileEnd(transfer, ok, message):
             w.u32(transfer); w.bool(ok); w.string(message)
+
+        case let .switchRoles(edge, alignment):
+            w.string(edge); w.string(alignment)
         }
         return w.data
     }
@@ -308,6 +324,9 @@ public enum Codec {
             case .ready:        return .ready
             case .fileRequest:  return .fileRequest
             case .fileDrop:     return .fileDrop
+            case .requestRoleSwitch: return .requestRoleSwitch
+            case .switchRoles:
+                return .switchRoles(edge: try r.string(), alignment: try r.string())
             case .leaveScreen:  return .leaveScreen
 
             case .ping:  return .ping(seq: try r.u32(), sentAt: try r.u64())

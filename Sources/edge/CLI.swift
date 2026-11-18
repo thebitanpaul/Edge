@@ -166,17 +166,25 @@ enum Runtime {
         }
     }
 
+    /// What SIGUSR1 means to this session: the menu-bar app asking it to swap roles with the
+    /// other Mac, over the link only the session holds.
+    nonisolated(unsafe) static var onRoleSwitchSignal: (() -> Void)?
+
     static func installSignalHandlers() {
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
+        signal(SIGUSR1, SIG_IGN)
         let int = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         for src in [int, term] {
             src.setEventHandler { interrupted = true }
             src.resume()
         }
+        let usr1 = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        usr1.setEventHandler { onRoleSwitchSignal?() }
+        usr1.resume()
         // Keep the sources alive for the process lifetime.
-        sources = [int, term]
+        sources = [int, term, usr1]
     }
 
     nonisolated(unsafe) private static var sources: [DispatchSourceSignal] = []

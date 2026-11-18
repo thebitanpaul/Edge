@@ -114,3 +114,47 @@ public struct RuntimeState: Codable, Sendable {
         [Role.sharing, .listening].compactMap { load($0) }
     }
 }
+
+/// A role swap, passed from a session process to the menu-bar app that supervises it.
+///
+/// The link between the two Macs belongs to the session, but the role belongs to the app: it
+/// is the app that restarts the session as the other role and opens the arrangement. So the
+/// session leaves this note, and the app — which already looks at this directory twice a
+/// second — acts on it once and deletes it.
+public struct RoleSwitchNote: Codable, Sendable {
+    public var becomePrimary: Bool
+    /// From the other Mac, already mirrored to this one's point of view.
+    public var edge: String?
+    public var alignment: String?
+    /// Whether the other Mac was told and is switching too.
+    public var otherMacFollows: Bool
+    public var at: Date
+
+    public init(becomePrimary: Bool, edge: String? = nil, alignment: String? = nil,
+                otherMacFollows: Bool) {
+        self.becomePrimary = becomePrimary
+        self.edge = edge
+        self.alignment = alignment
+        self.otherMacFollows = otherMacFollows
+        self.at = Date()
+    }
+
+    static var url: URL { Paths.supportDirectory.appendingPathComponent("role-switch.json") }
+
+    public func write() {
+        guard let data = try? JSONEncoder.edgeJSON.encode(self) else { return }
+        _ = try? Paths.ensureSupportDirectory()
+        try? AtomicFile.write(data, to: Self.url, mode: 0o600)
+    }
+
+    /// Reads and removes the note. One that has sat unread for a minute was meant for an app
+    /// that was not running then, and acting on it now would be a surprise.
+    public static func take() -> RoleSwitchNote? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let data = try? Data(contentsOf: url),
+              let note = try? JSONDecoder.edgeJSON.decode(RoleSwitchNote.self, from: data),
+              Date().timeIntervalSince(note.at) < 60 else { return nil }
+        return note
+    }
+}

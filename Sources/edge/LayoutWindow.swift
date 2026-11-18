@@ -92,6 +92,7 @@ final class ArrangementWindowController: NSWindowController {
     private let view = ArrangementView()
     private var note: NSTextField!
     private var alignmentPopup: NSPopUpButton!
+    private var caption: NSTextField!
     private var startButton: NSButton!
     private let isEditable: Bool
 
@@ -122,9 +123,7 @@ final class ArrangementWindowController: NSWindowController {
         note.alignment = .center
         content.addSubview(note)
 
-        let caption = NSTextField(labelWithString: isEditable
-            ? "Where the other Mac sits"
-            : "Set on the primary Mac")
+        caption = NSTextField(labelWithString: defaultCaption)
         caption.frame = NSRect(x: 20, y: 126, width: 480, height: 18)
         caption.font = .systemFont(ofSize: 11)
         caption.textColor = .secondaryLabelColor
@@ -245,9 +244,9 @@ final class ArrangementWindowController: NSWindowController {
                                    edge: config.edge, alignment: config.alignment)
 
         if view.layout == nil {
-            note.stringValue = "No displays to arrange."
+            note.stringValue = "No displays"
         } else if known == nil {
-            note.stringValue = "Its screen is a stand-in until the two Macs connect"
+            note.stringValue = "Placeholder until the Macs connect"
         } else {
             note.stringValue = "\(Self.screens(local.count)) here, \(Self.screens(remote.count)) there"
         }
@@ -263,7 +262,13 @@ final class ArrangementWindowController: NSWindowController {
                         isMain: true)]
     }
 
-    func present() {
+    private var defaultCaption: String { isEditable ? "Where the other Mac sits" : "Set on the primary" }
+
+    /// `headline`, when given, replaces the caption for this showing — the one line saying
+    /// why the window has opened by itself.
+    func present(headline: String? = nil) {
+        caption.stringValue = headline ?? defaultCaption
+        caption.textColor = headline == nil ? .secondaryLabelColor : .labelColor
         reload()
         NSApp.activate(ignoringOtherApps: true)
         window?.center()

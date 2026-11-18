@@ -47,7 +47,7 @@ grant you gave your terminal.
 
 ## Pair the two Macs
 
-Do this once. On **both** Macs, open Edge.app and choose **Set up…** (or run
+Do this once. On **both** Macs, open Edge.app and choose **Set up** (or run
 `edge pair nearby` on both). Each Mac shows the same six digits; confirm on both. The two
 Macs agree a key between them over the network, so there is no code to type and nothing for
 either to get wrong.
@@ -63,9 +63,9 @@ no Dock icon, no window.
   ─────────────────────────────
   Stop
   ─────────────────────────────
-  Devices              ▸  ✓ Work Mac ▸ Rename… · Set address… · Forget…
-                          Connect to a nearby Mac…
-  Screen arrangement…                       (primary only)
+  Devices              ▸  ✓ Work Mac ▸ Rename · Set address · Forget
+                          Pair a Mac
+  Screen arrangement                        (primary only)
   Connect over         ▸  Whichever connects · Cable · Wi-Fi   (primary only)
   ─────────────────────────────
   ✓ Share clipboard
@@ -73,8 +73,8 @@ no Dock icon, no window.
   ✓ Start at login
   ✓ Show in menu bar        (macOS 26+, once Edge is in Control Center)
   ─────────────────────────────
-  Change role…
-  Help                 ▸  Open log · Report an issue… · Version
+  Switch to Secondary                       (or Switch to Primary)
+  Help                 ▸  Open log · Report an issue · Version
   Quit Edge
 ```
 
@@ -120,7 +120,7 @@ lives in Control Center only. Edge never lets itself become unreachable:
 
 ### Pairing
 
-Choose **Devices ▸ Connect to a nearby Mac…** on *both* Macs. Each shows the same six digits;
+Choose **Set up** (or **Devices ▸ Pair a Mac**) on *both* Macs. Each shows the same six digits;
 confirm on both. That is the whole thing — there is nothing to type.
 
 The two Macs need the **same Wi-Fi network** to find each other. A cable alone is not enough:
@@ -152,22 +152,30 @@ cable just as it does over Wi-Fi.
 
 ### The rest of setup
 
-First time, choose **Set up…** on each Mac. One question:
+First time, choose **Set up** on each Mac. One question:
 
 * **Primary** — the Mac whose keyboard and mouse you use
 * **Secondary** — the Mac it reaches onto
 
-Set the other Mac to the other role; if both are the same, neither connects. Pairing starts
-straight away, so that is the whole of setup. The two Macs pair over the network they share;
-a cable can then carry the link.
+Choose Primary on one Mac and Secondary on the other; if both are the same, neither connects.
+Pairing starts straight away, so that is the whole of setup. The two Macs pair over the network
+they share; a cable can then carry the link.
 
 Then choose **Start** on the primary. The secondary gets itself ready on its own.
 
+### Swapping roles
+
+**Switch to Secondary** (or **Switch to Primary**) swaps both Macs at once while they are
+connected: the other Mac becomes the primary and opens **Screen arrangement**, already mirrored
+— if the secondary sat to the right, the old primary now sits to the left. Press **Start**
+there and you are done. If they are not connected, only this Mac switches, and Edge says to
+switch the other one too.
+
 Until the first connection, the pairing shows as *"&lt;Name&gt; — not connected yet"*. Once
-connected you can **Rename…** it to whatever you like.
+connected you can **Rename** it to whatever you like.
 
 If your network blocks Bonjour — common on managed networks — use **Devices ▸ &lt;the Mac&gt; ▸
-Set address…** and give the other Mac's IP. `edge doctor` on that Mac prints it.
+Set address** and give the other Mac's IP. `edge doctor` on that Mac prints it.
 
 Until the first connection, **Devices ▸ &lt;the Mac&gt;** also shows a key (eight hex
 characters). It must match on both Macs; `edge troubleshoot` shows it too. It is the one check
@@ -256,7 +264,7 @@ the handover point moves right; switched to the right Mac it widens that one ins
 sides watch for displays being plugged in or rearranged and re-send their layout, so a switch
 takes effect without reconnecting.
 
-**Menu bar ▸ Screen arrangement…** opens a window showing both Macs' screens to scale, with
+**Menu bar ▸ Screen arrangement** opens a window showing both Macs' screens to scale, with
 the edge and alignment set there. From the terminal:
 
 ```bash

@@ -57,11 +57,10 @@ enum LoginItem {
             return .done
         case .requiresApproval:
             return .finishInSettings(
-                "Turn Edge on under Login Items in System Settings, which is open now.")
+                "Turn Edge on in Login Items, now open in System Settings.")
         default:
             return .finishInSettings(
-                "macOS did not let Edge add itself. Click + under Open at Login and choose "
-                + "Edge.app to add it by hand.")
+                "Click + under Open at Login and choose Edge.app.")
         }
     }
 
@@ -82,7 +81,7 @@ enum LoginItem {
         // is the one kind of wrong this switch can be, and it stays invisible until then.
         if isEnabled {
             return .finishInSettings(
-                "Edge could not remove itself. Under Open at Login, select Edge and click −.")
+                "Select Edge under Open at Login and click −.")
         }
         return .done
     }

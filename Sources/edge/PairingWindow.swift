@@ -47,7 +47,7 @@ final class PairingWindowController: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 236),
                               styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
-        window.title = "Connect to a nearby Mac"
+        window.title = "Pair a Mac"
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
@@ -155,8 +155,7 @@ final class PairingWindowController: NSWindowController, NSWindowDelegate {
             spinner.isHidden = false
             spinner.startAnimation(nil)
             title.stringValue = "Looking for the other Mac"
-            detail.stringValue = "On the other Mac, choose Connect to a nearby Mac… too.\n"
-                + "Both need to be on the same network."
+            detail.stringValue = "Both Macs need to be on the same network."
             primaryButton.title = "Search again"
             primaryButton.isEnabled = true
             secondaryButton.title = "Cancel"
@@ -177,7 +176,7 @@ final class PairingWindowController: NSWindowController, NSWindowDelegate {
             spinner.isHidden = false
             spinner.startAnimation(nil)
             title.stringValue = "Waiting for \(peer)"
-            detail.stringValue = "Confirm the same number over there."
+            detail.stringValue = "Confirm the number on that Mac."
             primaryButton.title = "Waiting"
             primaryButton.isEnabled = false
             secondaryButton.title = "Cancel"

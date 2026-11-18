@@ -18,7 +18,7 @@ public enum EdgeError: LocalizedError {
         case .noSuchPairing(let s):
             return "no pairing matches '\(s)' — run `edge pair list` to see what exists"
         case .notPaired:
-            return "no pairings yet.\n  On both Macs:  edge pair nearby   (or Set up… in the menu bar)"
+            return "no pairings yet.\n  On both Macs:  edge pair nearby   (or Set up in the menu bar)"
         case .ambiguous(let s, let options):
             return "'\(s)' matches more than one pairing: \(options.joined(separator: ", "))"
         case .badPairingCode(let s):

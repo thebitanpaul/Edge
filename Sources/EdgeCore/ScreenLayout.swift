@@ -66,6 +66,16 @@ public enum ScreenEdge: String, Codable, CaseIterable, Sendable {
 
     public var isHorizontal: Bool { self == .left || self == .right }
 
+    /// Where this Mac sits as seen from the other one: if it is to my right, I am to its left.
+    public var opposite: ScreenEdge {
+        switch self {
+        case .left:   return .right
+        case .right:  return .left
+        case .top:    return .bottom
+        case .bottom: return .top
+        }
+    }
+
     /// Where the other Mac sits, as a person would say it: "to the left", "above".
     public var phrase: String {
         switch self {

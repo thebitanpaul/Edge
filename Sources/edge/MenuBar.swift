@@ -191,9 +191,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             : "Edge needs two permissions"
         alert.informativeText =
             missing.map { "\($0.name) — \($0.why)" }.joined(separator: "\n")
-            + "\n\nThese are safe to grant here: Edge talks only to the Mac you paired it "
-            + "with, over your own network. There is no server, and nothing leaves your desk."
-            + "\n\nEdge's location is copied too, in case System Settings asks you to add it with +."
+            + "\n\nEdge only talks to the Mac you paired. Its location is copied, in case "
+            + "System Settings asks you to add it with +."
         for item in missing { alert.addButton(withTitle: "Open \(item.name)") }
         alert.addButton(withTitle: "Later")
 
@@ -303,6 +302,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func refresh() {
+        // A session asking for a role swap: see `switchRole`.
+        if let note = RoleSwitchNote.take() {
+            applyRoleSwitch(note)
+            return
+        }
         lastKnownState = currentState
         updateBlinking()
         announceLinkProblemIfNeeded()
@@ -391,7 +395,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         func addPermissionItems() {
             for item in missingPermissions {
                 menu.addItem(.separator())
-                menu.addItem(disabled("\(item.name) is off — needed \(item.why)"))
                 let grant = action("Grant \(item.name)", #selector(grantPermission(_:)))
                 grant.representedObject = item.settingsURL
                 menu.addItem(grant)
@@ -399,8 +402,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         if store.pairings.isEmpty {
-            menu.addItem(disabled("Not set up"))
-            menu.addItem(action("Set up…", #selector(runSetup)))
+            menu.addItem(action("Set up", #selector(runSetup)))
             addPermissionItems()
             menu.addItem(.separator())
             menu.addItem(action("Quit Edge", #selector(quit)))
@@ -410,11 +412,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Status: role first, because everything else in this menu depends on it.
         if !isRunning {
             menu.addItem(disabled("Stopped · \(mode.shortTitle)"))
-            // Worth spelling out on the secondary: the primary has no way to say so, and a
-            // Mac that will not connect is the only symptom.
-            if mode == .client {
-                menu.addItem(disabled("The primary cannot reach this Mac while it is stopped"))
-            }
         } else if let state, state.connected {
             let peer = state.peerName ?? "the other Mac"
             menu.addItem(disabled(mode == .host && state.pointerIsRemote == true
@@ -431,8 +428,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         } else if mode == .client {
             // The secondary has nothing to do until the primary dials, and nothing it can do
             // to hurry that along. "Ready" is the truth; "connecting" was not.
-            menu.addItem(disabled("Secondary · ready"))
-            menu.addItem(disabled("Choose Start on the primary"))
+            menu.addItem(disabled("Secondary · waiting for the primary"))
         } else {
             menu.addItem(disabled("Primary · connecting"))
             menu.addItem(disabled(waitingHint))
@@ -486,13 +482,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let icon = action("Show in menu bar", #selector(toggleMenuBarIcon))
             icon.state = prefersHiddenIcon ? .off : .on
             menu.addItem(icon)
-            if controlInMenuBar {
-                menu.addItem(disabled("The Edge control in the menu bar stands in for it"))
-            }
         }
 
         menu.addItem(.separator())
-        menu.addItem(action("Change role…", #selector(runSetup)))
+        menu.addItem(action("Switch to \(mode.opposite.shortTitle)", #selector(switchRole)))
         menu.addItem(helpMenuItem())
         menu.addItem(action("Quit Edge", #selector(quit)))
     }
@@ -501,7 +494,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         submenu.addItem(action("Open log", #selector(openLog)))
-        submenu.addItem(action("Report an issue…", #selector(reportIssue)))
+        submenu.addItem(action("Report an issue", #selector(reportIssue)))
         submenu.addItem(.separator())
         submenu.addItem(disabled("Version \(Runtime.shortVersion)"))
         item.submenu = submenu
@@ -671,15 +664,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         alert.messageText = "Which Mac is this?"
         alert.informativeText = "Primary is the Mac whose keyboard and mouse you use. "
-            + "Set the other Mac to the other role."
-        alert.addButton(withTitle: "Primary — I use this keyboard")
-        alert.addButton(withTitle: "Secondary — controlled from the other Mac")
+            + "The other one is Secondary."
+        alert.addButton(withTitle: "Primary")
+        alert.addButton(withTitle: "Secondary")
         alert.addButton(withTitle: "Cancel")
 
         let answer = alert.runModal()
         guard answer != .alertThirdButtonReturn else { return }
         let chosen: Mode = answer == .alertFirstButtonReturn ? .host : .client
-        let changed = chosen != mode
 
         // Stop first, always. Changing roles while a session runs leaves it dialling with the
         // old one, which is why switching appeared to half-work: the connection came back
@@ -687,48 +679,71 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         stopSession()
         setMode(chosen, restart: false)
 
-        let store = (try? SecretStore.load()) ?? SecretStore()
-        if store.pairings.isEmpty {
+        if ((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty {
             // Whichever connects. Nothing is known yet about what this desk has, and a
             // preference chosen before the first connection is a guess that can only fail.
             applyConfig { $0.preferredLink = LinkPreference.auto.rawValue }
             performPairNearby()
             return
         }
-
-        guard changed else {
-            notify("This Mac is \(chosen.shortTitle)", startingInstruction(for: chosen))
-            autoStartIfSecondary()
-            refresh()
-            return
-        }
-
-        // A role change throws the screen arrangement away, and it has to: it described
-        // where the *other* Mac sat relative to this one, and that sentence is now about a
-        // different pair of screens. Saying so here rather than letting it be discovered the
-        // first time the pointer refuses to cross.
-        if chosen == .host {
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = "This Mac is now Primary"
-            alert.informativeText = "Set the other Mac to Secondary. "
-                + "The arrangement was reset — show where its screen sits."
-            alert.addButton(withTitle: "Arrange screens")
-            alert.addButton(withTitle: "Later")
-            if alert.runModal() == .alertFirstButtonReturn {
-                performShowArrangement()
-            }
-        } else {
-            notify("This Mac is now Secondary",
-                   "Set the other Mac to Primary. This one stays ready on its own.")
-            autoStartIfSecondary()
-        }
+        autoStartIfSecondary()
         refresh()
     }
 
-    /// What to press, and where, once the roles are settled.
-    private func startingInstruction(for chosen: Mode) -> String {
-        chosen == .host ? "Choose Start here." : "Choose Start on the primary."
+    // MARK: Switching roles
+
+    /// Pending fallback for a switch the other Mac has been asked to join.
+    private var pendingRoleSwitch: DispatchWorkItem?
+
+    /// Swaps the two Macs' roles, both at once when they are connected.
+    ///
+    /// Only the session holds the link, so it is asked with a signal. Whichever Mac this is,
+    /// the primary drives: it tells the other Mac to take over, with the arrangement already
+    /// mirrored, and each session leaves a note this app acts on (see `RoleSwitchNote`). If
+    /// nothing comes back — the other Mac is on an older build, or the link has just
+    /// dropped — this Mac switches on its own and says what is left to do.
+    @objc private func switchRole() {
+        let becomePrimary = mode == .client
+        guard let state = currentState, state.connected else {
+            applyRoleSwitch(RoleSwitchNote(becomePrimary: becomePrimary, otherMacFollows: false))
+            return
+        }
+        kill(state.pid, SIGUSR1)
+        let fallback = DispatchWorkItem { [weak self] in
+            self?.applyRoleSwitch(RoleSwitchNote(becomePrimary: becomePrimary, otherMacFollows: false))
+        }
+        pendingRoleSwitch?.cancel()
+        pendingRoleSwitch = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: fallback)
+    }
+
+    private func applyRoleSwitch(_ note: RoleSwitchNote) {
+        pendingRoleSwitch?.cancel()
+        pendingRoleSwitch = nil
+        let chosen: Mode = note.becomePrimary ? .host : .client
+        guard chosen != mode else { return }
+        setMode(chosen, restart: false)
+
+        if note.becomePrimary {
+            // Where the other Mac sits, as it described this one from its side.
+            if let edge = note.edge.flatMap(ScreenEdge.parse) {
+                var config = (try? Config.load()) ?? Config()
+                config.remoteEdge = edge.rawValue
+                if let alignment = note.alignment.flatMap(ScreenAlignment.parse) {
+                    config.remoteAlignment = alignment.rawValue
+                }
+                try? config.save()
+            }
+            performShowArrangement(headline: note.otherMacFollows
+                ? "Now Primary. Check the arrangement, then press Start."
+                : "Now Primary. Switch the other Mac to Secondary, then press Start.")
+        } else {
+            autoStartIfSecondary()
+            if !note.otherMacFollows {
+                notify("Now Secondary", "Switch the other Mac to Primary too.")
+            }
+        }
+        refresh()
     }
 
     /// A short line naming the likeliest reason nothing has connected yet.
@@ -736,7 +751,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// The commonest by far is both Macs set to the same role, and because neither one dials
     /// in that case there is nothing in any log to notice.
     private var waitingHint: String {
-        "Make sure the other Mac is set to \(mode.opposite.shortTitle)"
+        "The other Mac must be \(mode.opposite.shortTitle)"
     }
 
     // MARK: Devices
@@ -772,8 +787,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         submenu.addItem(.separator())
-        submenu.addItem(action("Connect to a nearby Mac…", #selector(pairNearby)))
-        submenu.addItem(disabled("Choose this on the other Mac too"))
+        submenu.addItem(action("Pair a Mac", #selector(pairNearby)))
         item.submenu = submenu
         return item
     }
@@ -794,8 +808,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         detail.addItem(.separator())
-        for (title, selector) in [("Rename…", #selector(renameDevice(_:))),
-                                  ("Set address…", #selector(setDeviceAddress(_:))),
+        for (title, selector) in [("Rename", #selector(renameDevice(_:))),
+                                  ("Set address", #selector(setDeviceAddress(_:))),
                                   ("Forget", #selector(forgetDevice(_:)))] {
             let entry = NSMenuItem(title: title, action: selector, keyEquivalent: "")
             entry.target = self
@@ -931,13 +945,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // where the other Mac sits and presses Start; the secondary has nothing to decide
             // and has already made itself ready.
             if mode == .host {
-                notify("Paired with \(outcome.peerName)",
-                       "Now show where its screen sits, then choose Start.")
                 // One turn of the run loop, so the pairing window is fully gone first.
-                DispatchQueue.main.async { [weak self] in self?.performShowArrangement() }
+                let headline = "Paired with \(outcome.peerName). Check the arrangement, then press Start."
+                DispatchQueue.main.async { [weak self] in self?.performShowArrangement(headline: headline) }
             } else {
-                notify("Paired with \(outcome.peerName)",
-                       "This Mac is ready. Choose Start on the primary.")
+                notify("Paired with \(outcome.peerName)", "Choose Start on the primary.")
                 autoStartIfSecondary()
             }
         } catch {
@@ -956,7 +968,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard let label else { return }
         let confirm = NSAlert()
         confirm.messageText = "Forget “\(label)”?"
-        confirm.informativeText = "To use it again, pair the two Macs again."
+        confirm.informativeText = "You'll need to pair again to use it."
         confirm.addButton(withTitle: "Forget")
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
@@ -978,7 +990,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func arrangementMenuItem() -> NSMenuItem {
         // Opens the window. Everything it offers lives there, so a submenu repeating it would
         // be a second place to change the same thing.
-        let item = NSMenuItem(title: "Screen arrangement…", action: #selector(showArrangement),
+        let item = NSMenuItem(title: "Screen arrangement", action: #selector(showArrangement),
                               keyEquivalent: "")
         item.target = self
         return item
@@ -1004,7 +1016,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         DispatchQueue.main.async { [weak self] in self?.performShowArrangement() }
     }
 
-    private func performShowArrangement() {
+    private func performShowArrangement(headline: String? = nil) {
         if arrangementWindow == nil {
             // Editable only on the primary: the arrangement decides where that Mac's pointer
             // goes, and the secondary has no say in it.
@@ -1022,7 +1034,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             arrangementWindow = controller
         }
-        arrangementWindow?.present()
+        arrangementWindow?.present(headline: headline)
     }
 
     private func disabled(_ title: String) -> NSMenuItem {
@@ -1084,7 +1096,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         try? config.save()
 
         if config.clipboardSharing {
-            notify("Clipboard sharing on", "Turn on Share clipboard on the other Mac too.")
+            notify("Share clipboard is on", "Turn it on on the other Mac too.")
         }
         // The setting is read when a session starts, so an existing one has to be restarted.
         if isRunning {
@@ -1099,9 +1111,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         config.fileSharing.toggle()
         try? config.save()
         if config.fileSharing {
-            notify("Dragged files will cross",
-                   "Drag a file across the shared edge and let go — it lands in Downloads on "
-                   + "the other Mac. Turn this on there too.")
+            notify("Carry dragged files is on",
+                   "Files land in Downloads on the other Mac. Turn it on there too.")
         }
         if isRunning { stopSession(); startSession() }
         refresh()
@@ -1388,8 +1399,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             guard let self else { return }
             guard Self.canQuitFromControlCenter(kinds) else {
                 self.notify("Add Edge to Control Center first",
-                            "Open Control Center, click Edit Controls, search for Edge and add the "
-                            + "Edge switch or Edge Options. Then the menu bar icon can be hidden.")
+                            "Open Control Center ▸ Edit Controls and add Edge or Edge Options.")
                 return
             }
             self.prefersHiddenIcon = true
@@ -1397,9 +1407,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self.applyIconVisibility()
             self.startReachabilityChecks()
             self.notify("Menu bar icon hidden",
-                        "Use Edge in Control Center: the switch turns it on or quits it, and "
-                        + "Edge Options opens this menu. Opening Edge from Applications brings "
-                        + "the icon back.")
+                        "Use Edge in Control Center. Open Edge from Applications to bring the icon back.")
         }
     }
 
@@ -1434,8 +1442,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let other = RuntimeState.existing(mode.runtimeRole) {
             let alert = NSAlert()
             alert.messageText = "Edge is already running on this Mac"
-            alert.informativeText = "Another Edge session, perhaps one started in Terminal, is "
-                + "running. Two at once make the pointer lag."
+            alert.informativeText = "Another Edge session is running, perhaps in Terminal. "
+                + "Two at once make the pointer lag."
             alert.addButton(withTitle: "Take over")
             alert.addButton(withTitle: "Leave it")
             guard alert.runModal() == .alertFirstButtonReturn else { return }

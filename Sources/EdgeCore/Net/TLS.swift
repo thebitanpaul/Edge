@@ -20,7 +20,7 @@ public enum LinkPreference: String, CaseIterable, Sendable {
     public var title: String {
         switch self {
         case .auto: return "Whichever connects"
-        case .cable: return "Cable (USB-C or Thunderbolt)"
+        case .cable: return "Cable"
         case .wifi: return "Wi-Fi"
         }
     }

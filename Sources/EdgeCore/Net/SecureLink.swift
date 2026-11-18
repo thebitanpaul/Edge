@@ -141,7 +141,7 @@ public final class SecureLink {
                     + "  · if it was already running when you paired, restart it over there —\n"
                     + "    a session reads the keys it will accept when it starts\n"
                     + "  · otherwise the two Macs hold different pairings; pair them again\n"
-                    + "    (Devices ▸ Connect to a nearby Mac…)"
+                    + "    (Devices ▸ Pair a Mac)"
             }
             return "TLS handshake failed (OSStatus \(status)) — the two Macs may hold different pairings; pair them again"
         }

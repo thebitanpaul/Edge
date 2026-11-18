@@ -200,6 +200,13 @@ extension Commands {
         try listener.start()
         session.startWatchingDisplays()
         Runtime.installSignalHandlers()
+        // The menu-bar app asking to become the primary: ask the primary to swap, since it
+        // holds the arrangement. If it cannot be asked, this Mac switches on its own.
+        Runtime.onRoleSwitchSignal = {
+            if !session.requestRoleSwitch() {
+                RoleSwitchNote(becomePrimary: true, otherMacFollows: false).write()
+            }
+        }
 
         // Noticing a new pairing matters more than it sounds: without it, a session that was
         // running when you paired keeps refusing the new key for ever.
@@ -396,7 +403,28 @@ extension Commands {
         }
         heartbeat.onTimeout = { seq in warn("heartbeat \(seq) lost") }
 
+        // Swapping roles. Asked for by this Mac's menu-bar app (a signal) or by the other Mac
+        // (a message); either way this side drives it, because only the primary knows the
+        // arrangement to hand over — mirrored, since if the other Mac is to my right, I am to
+        // its left. The note tells the menu-bar app to restart this Mac as the secondary.
+        let handOver: () -> Void = { [weak link] in
+            let follows = link?.peer?.capabilities.contains(.roleSwitch) == true
+            if follows, let link {
+                let current = (try? Config.load()) ?? config
+                link.send(.switchRoles(edge: current.edge.opposite.rawValue,
+                                       alignment: current.alignment.rawValue))
+            }
+            RoleSwitchNote(becomePrimary: false, otherMacFollows: follows).write()
+            info(follows ? "swapping roles: \(peerLabel) becomes the primary"
+                         : "becoming the secondary; \(peerLabel) cannot be told")
+        }
+        Runtime.onRoleSwitchSignal = handOver
+
         link.onMessage = { message in
+            if case .requestRoleSwitch = message {
+                DispatchQueue.main.async { handOver() }
+                return
+            }
             heartbeat.handle(message)
             sharing?.noteTraffic()
             clipboard.handle(message, limit: config.clipboardLimit)
@@ -648,6 +676,14 @@ final class ReceivingSession {
     private var currentLinkID: ObjectIdentifier?
 
     /// Whether `linkID` is the link this session is attached to now.
+    /// Asks the primary to swap roles. False if there is no one to ask who understands.
+    func requestRoleSwitch() -> Bool {
+        lock.lock(); let link = self.link; lock.unlock()
+        guard let link, link.peer?.capabilities.contains(.roleSwitch) == true else { return false }
+        link.send(.requestRoleSwitch)
+        return true
+    }
+
     func isCurrent(_ linkID: ObjectIdentifier) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return currentLinkID == linkID
@@ -697,6 +733,13 @@ final class ReceivingSession {
 
         case let .flagsChanged(flags):
             injector.changeFlags(flags)
+
+        case let .switchRoles(edge, alignment):
+            // The primary is handing over. The menu-bar app restarts this Mac as the primary
+            // and shows the arrangement, already mirrored from the other side.
+            RoleSwitchNote(becomePrimary: true, edge: edge, alignment: alignment,
+                           otherMacFollows: true).write()
+            info("the other Mac handed over: this Mac becomes the primary")
 
         case let .mediaKey(key, down, isRepeat):
             injector.mediaKey(MediaKey(key: key, down: down, isRepeat: isRepeat))

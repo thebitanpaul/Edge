@@ -29,25 +29,14 @@ extension Commands {
         out(Style.dim("  loopback only — nothing leaves this Mac"))
         out()
 
-        // ---- 1. Pairing codes -------------------------------------------------
-        out(Style.bold("Pairing codes"))
-        let code = PairingCode.generate()
-        let reparsed = try? PairingCode.parse(code.formatted)
-        record("code survives a round trip",
-               reparsed.map { Crypto.constantTimeEquals($0.secret, code.secret) } ?? false,
-               code.formatted)
-
-        var mangled = Array(code.formatted)
-        if let idx = mangled.firstIndex(where: { $0.isNumber || ($0.isLetter && $0 != "-") }) {
-            mangled[idx] = mangled[idx] == "7" ? "8" : "7"
-        }
-        let typo = String(mangled)
-        var typoRejected = false
-        do { _ = try PairingCode.parse(typo) } catch { typoRejected = true }
-        record("a single-character typo is rejected", typoRejected, "checksum caught it")
-
+        // ---- 1. Keys ----------------------------------------------------------
+        // The key a pairing produces: 32 random bytes, the same shape `pair nearby` derives.
+        // (Typed pairing codes were retired; their checks went with them, one of which
+        // failed by chance now and then — a typo the checksum happened not to catch.)
+        out(Style.bold("Keys"))
+        let psk = Crypto.randomBytes(32)
         record("derived keys are independent",
-               !Crypto.constantTimeEquals(code.psk, Crypto.deriveAuthKey(fromPSK: code.psk)),
+               !Crypto.constantTimeEquals(psk, Crypto.deriveAuthKey(fromPSK: psk)),
                "psk ≠ auth key")
 
         // ---- 2. Codec ---------------------------------------------------------
@@ -109,7 +98,7 @@ extension Commands {
 
         let identity = try Identity.loadOrCreate()
         var ephemeral = SecretStore()
-        ephemeral.pairings = [Pairing(psk: code.psk, label: "selftest")]
+        ephemeral.pairings = [Pairing(psk: psk, label: "selftest")]
         // Never touches the real secrets file: the directory is constructed in memory and the
         // `mutate` path (the only thing that writes) is not used here.
         let directory = PairingDirectory(store: ephemeral, inMemory: true)
@@ -119,7 +108,7 @@ extension Commands {
             localRole: .client,
             options: .init(port: 0, requireLocalNetwork: true, bonjourName: nil,
                            handshakeTimeout: 5, loopbackOnly: true),
-            keys: [PSKEntry(psk: code.psk)],
+            keys: [PSKEntry(psk: psk)],
             resolvePSK: { [weak directory] in directory?.psk(forKeyID: $0) },
             authorizePeer: { [weak directory] in directory?.authorize(deviceID: $0, keyID: $1) ?? false })
 
@@ -149,7 +138,7 @@ extension Commands {
                                            port: NWEndpoint.Port(rawValue: port)!)
 
         // 3a. correct key
-        let good = try attempt(endpoint: endpoint, psk: code.psk, identity: identity)
+        let good = try attempt(endpoint: endpoint, psk: psk, identity: identity)
         record("handshake with the correct key", good.ready,
                good.ready ? good.tls : (good.error ?? "no reason given"))
         if let rtt = good.rtt {
@@ -170,14 +159,14 @@ extension Commands {
         let impostorIdentity = Identity(deviceID: DeviceID(),
                                         deviceName: "Impostor",
                                         createdAt: Date())
-        let impostor = try attempt(endpoint: endpoint, psk: code.psk, identity: impostorIdentity)
+        let impostor = try attempt(endpoint: endpoint, psk: psk, identity: impostorIdentity)
         record("a different Mac reusing the same key is refused", !impostor.ready,
                impostor.ready ? "ACCEPTED — THIS IS A BUG" : "rejected by the device allowlist")
 
         // ---- 4. Files over that same link -------------------------------------
         out()
         out(Style.bold("Dragged files (loopback)"))
-        try checkFileTransfer(endpoint: endpoint, psk: code.psk, identity: identity,
+        try checkFileTransfer(endpoint: endpoint, psk: psk, identity: identity,
                               accepted: accepted, incoming: incoming, record: record)
 
         // ---- summary ----------------------------------------------------------

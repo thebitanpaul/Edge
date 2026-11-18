@@ -76,7 +76,7 @@ extension Commands {
             warn("nothing advertising — Bonjour is blocked on many managed networks")
             if targets.isEmpty {
                 bad("and no address is set for any pairing, so there is nothing to dial")
-                out(Style.dim("    menu bar ▸ Devices ▸ <the Mac> ▸ Set address…"))
+                out(Style.dim("    menu bar ▸ Devices ▸ <the Mac> ▸ Set address"))
                 problems.append("no way to find the other Mac")
             }
         } else {
