@@ -61,6 +61,8 @@ gh_api() { curl -sS -H "Authorization: Bearer $TOKEN" -H "Accept: application/vn
 json() { python3 -I -c "import json,sys; d=json.load(open(sys.argv[1])); $1" "$2"; }
 
 SHA="$(cut -d' ' -f1 "$ROOT/dist/Edge.dmg.sha256")"
+# The notes go above the "### Download" heading. .github/scripts/sync_release_notes.py finds
+# where the notes end by that heading when it updates a release, so keep it.
 python3 -I - "$VERSION" "$SHA" "$NOTES" > "$TMP/body.json" <<'EOF'
 import json, sys
 version, sha, notes_path = sys.argv[1:4]

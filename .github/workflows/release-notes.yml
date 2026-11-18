@@ -1,0 +1,27 @@
+name: Release notes
+
+# Edit release-notes/vX.Y.Z.md, commit, push to main — and the GitHub release page for vX.Y.Z
+# shows the new text a few seconds later. See .github/scripts/sync_release_notes.py.
+
+on:
+  push:
+    branches: [main]
+    paths: ["release-notes/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-notes
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update the release pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/sync_release_notes.py

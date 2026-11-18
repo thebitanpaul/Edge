@@ -9,12 +9,18 @@
 #   2. asks for the version, suggesting the next one
 #   3. asks you to confirm the "Edge Local Signing" certificate is in the login keychain
 #      (offering to import edge-signing.p12), then proves it can sign with it
-#   4. writes release notes from the commits since the last release, for you to check or edit
+#   4. writes release-notes/vX.Y.Z.md from the commits since the last release, for you to
+#      check or edit
 #   5. runs the unit tests
-#   6. sets the version in Sources/edge/CLI.swift and commits it
+#   6. sets the version in Sources/edge/CLI.swift and commits it with the notes
 #   7. builds, signs and packs the universal DMG, and checks the signature is the release one
 #   8. pushes main and the tag vX.Y.Z
 #   9. publishes the GitHub release, marked Latest, and checks the download link serves it
+#
+# Uncommitted changes are offered for committing first; a release is built from a commit.
+#
+# The notes stay in the repo. Edit release-notes/vX.Y.Z.md later, commit and push, and the
+# release page follows (.github/workflows/release-notes.yml).
 #
 # Nothing leaves this Mac before step 8. If anything fails before then, the version commit is
 # undone and the repo is as it was. If a later step fails, run this again and give the same
@@ -33,7 +39,8 @@ ROOT="$PWD"
 CLI="Sources/edge/CLI.swift"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 APP="$ROOT/build/Edge.app"
-DIST="$ROOT/dist"
+DIST="$ROOT/dist"   # build output and logs; not in git
+mkdir -p "$DIST"
 
 RUN_TESTS=1
 for arg in "$@"; do
@@ -71,8 +78,12 @@ PUSHED=0
 on_exit() {
   local status=$?
   if [ "$status" -ne 0 ] && [ "$BUMPED" = 1 ] && [ "$PUSHED" = 0 ]; then
+    # The reset would delete the notes along with the commit that added them; keep them,
+    # uncommitted, so the next run picks them up with any edits.
+    cp "$ROOT/$NOTES" "$WORK/notes.md" 2>/dev/null || true
     if git reset --quiet --keep "$START_HEAD"; then
-      echo "    Undid the version commit. Nothing was pushed; the repo is as it was." >&2
+      [ -f "$ROOT/$NOTES" ] || cp "$WORK/notes.md" "$ROOT/$NOTES" 2>/dev/null || true
+      echo "    Undid the version commit. Nothing was pushed; the notes are kept in $NOTES." >&2
     else
       echo "    Could not undo the version commit. To do it by hand:  git reset --keep $START_HEAD" >&2
     fi
@@ -123,16 +134,25 @@ done
 BRANCH="$(git symbolic-ref --short -q HEAD || true)"
 [ "$BRANCH" = main ] || die "Releases are made from main, and this is '${BRANCH:-a detached HEAD}'.  git switch main"
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  git status --short --untracked-files=no | sed 's/^/      /'
-  die "Commit or stash these changes first: a release is built from a commit, exactly."
-fi
-
 # --force: mirror GitHub's tags even if a local one is stale.
 git fetch --quiet --force --tags origin main || die "Could not reach GitHub (git fetch failed)."
 BEHIND="$(git rev-list --count HEAD..origin/main)"
 [ "$BEHIND" = 0 ] || die "main is $BEHIND commit(s) behind GitHub. Run  git pull --ff-only  and start again."
-ok "on main, no uncommitted changes, up to date with GitHub"
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "    These files have changes that are not committed yet:"
+  git status --short --untracked-files=no | sed 's/^/      /'
+  echo "    A release is built from a commit, so they have to be committed first. They will be"
+  echo "    pushed along with the release."
+  case "$(ask "    Commit them now? [Y/n] ")" in
+    ""|y|Y|yes|Yes|YES) ;;
+    *) die "Stopped. Commit or stash them, then run this again." ;;
+  esac
+  MSG="$(ask "    Commit message (Enter for \"Prepare the next release\"): ")"
+  git add -u
+  git commit --quiet -m "${MSG:-Prepare the next release}"
+  ok "committed as $(git log -1 --format='%h %s')"
+fi
+ok "on main, everything committed, up to date with GitHub"
 
 TOKEN="$(github_token)"
 [ -n "$TOKEN" ] || die "No GitHub login on this Mac. Push to GitHub once so the keychain has it, or export GITHUB_TOKEN."
@@ -312,8 +332,10 @@ ok "this Mac can sign Edge releases"
 # =============================================================================================
 step "Release notes"
 
-mkdir -p "$DIST"
-NOTES="$DIST/release-notes-$VERSION.md"
+# In the repo, one file per release. Committed with the version, so editing and committing it
+# later updates the release page too (.github/workflows/release-notes.yml).
+NOTES="release-notes/$TAG.md"
+mkdir -p "$ROOT/release-notes"
 
 # The release before this one, to list what changed since.
 PREV_TAG=""
@@ -353,34 +375,44 @@ write_notes() {
 }
 
 new_notes() {
-  write_notes > "$NOTES"
+  write_notes > "$ROOT/$NOTES"
   SKIPPED="$(cat "$WORK/skipped")"
   ok "written from the commits since ${PREV_TAG:-the beginning}"
   [ "$SKIPPED" = 0 ] || ok "left out $SKIPPED commit(s) that only touch scripts, docs or tests"
 }
-# Keep notes from an earlier, stopped run of this version: they may have been edited.
-if [ -f "$NOTES" ]; then
-  ok "using the notes from last time (${NOTES#$ROOT/}) — r below writes them afresh"
-else
-  new_notes
-fi
-
-while :; do
+show_notes() {
   echo "    ${DIM}┌──────────────────────────────────────────────────────────────────────${R}"
-  sed "s/^/    ${DIM}│${R} /" "$NOTES"
+  sed "s/^/    ${DIM}│${R} /" "$ROOT/$NOTES"
   echo "    ${DIM}└──────────────────────────────────────────────────────────────────────${R}"
   echo "    Download link, install steps and checksum are added below these automatically."
-  case "$(ask "    Enter to use these notes, e to edit, r to rewrite from the commits, q to stop: ")" in
-    "") break ;;
-    r|R) new_notes ;;
-    e|E)
-      ED="${VISUAL:-${EDITOR:-nano}}"
-      # Unquoted on purpose: EDITOR may carry arguments, like "code --wait".
-      $ED "$NOTES" </dev/tty >/dev/tty || warn "The editor exited with an error."
-      ;;
-    q|Q) die "Stopped. Nothing was changed. (Notes kept in ${NOTES#$ROOT/}.)" ;;
-  esac
-done
+}
+
+if [ "$RESUME" = 1 ] && git cat-file -e "HEAD:$NOTES" 2>/dev/null; then
+  # Already committed with the tagged version: editing it now would change the release commit.
+  ok "$NOTES, as committed with $TAG"
+  show_notes
+  echo "    To change them later: edit $NOTES, commit and push. The release page follows."
+else
+  # Keep notes from an earlier, stopped run, or ones you wrote yourself: they may be edited.
+  if [ -f "$ROOT/$NOTES" ]; then
+    ok "using the existing $NOTES — r below writes it afresh from the commits"
+  else
+    new_notes
+  fi
+  while :; do
+    show_notes
+    case "$(ask "    Enter to use these notes, e to edit, r to rewrite from the commits, q to stop: ")" in
+      "") break ;;
+      r|R) new_notes ;;
+      e|E)
+        ED="${VISUAL:-${EDITOR:-nano}}"
+        # Unquoted on purpose: EDITOR may carry arguments, like "code --wait".
+        $ED "$ROOT/$NOTES" </dev/tty >/dev/tty || warn "The editor exited with an error."
+        ;;
+      q|Q) die "Stopped. Nothing was committed or pushed. (The notes are kept in $NOTES.)" ;;
+    esac
+  done
+fi
 
 # =============================================================================================
 step "Ready to release Edge $VERSION"
@@ -388,9 +420,7 @@ step "Ready to release Edge $VERSION"
 if [ "$RESUME" = 1 ]; then
   echo "    Commit     $(git log -1 --format='%h %s') — already tagged $TAG"
 else
-  if [ "$VERSION" != "$CODE_VERSION" ]; then
-    echo "    Commit     \"Edge $VERSION\" (sets $CLI) on top of $(git rev-parse --short HEAD)"
-  fi
+  echo "    Commit     \"Edge $VERSION\" on top of $(git rev-parse --short HEAD): $CLI and $NOTES"
   echo "    Tag        $TAG"
 fi
 echo "    Signed by  $SIGNING_NAME ($SHA1)"
@@ -414,14 +444,19 @@ if [ "$RUN_TESTS" = 1 ]; then
   ok "tests pass"
 fi
 
-if [ "$VERSION" != "$CODE_VERSION" ]; then
-  step "Setting the version to $VERSION"
+if [ "$RESUME" = 0 ]; then
+  step "Committing version $VERSION and its release notes"
   START_HEAD="$HEAD_SHA"
   sed -i '' "s/^\( *static let shortVersion = \"\)[^\"]*\"/\1$VERSION\"/" "$CLI"
   grep -F "static let shortVersion = \"$VERSION\"" "$CLI" >/dev/null || die "Could not set the version in $CLI."
-  BUMPED=1
-  git commit --quiet -m "Edge $VERSION" -- "$CLI"
-  ok "$CLI → $VERSION, committed as $(git rev-parse --short HEAD) (not pushed yet)"
+  git add -- "$CLI" "$NOTES"
+  if ! git diff --cached --quiet; then
+    BUMPED=1
+    git commit --quiet -m "Edge $VERSION"
+    ok "$CLI → $VERSION and $NOTES, committed as $(git rev-parse --short HEAD) (not pushed yet)"
+  else
+    ok "both were already committed"
+  fi
 fi
 
 step "Building, signing and packing the universal DMG — this takes a few minutes"
@@ -464,7 +499,7 @@ fi
 ok "$TAG"
 
 step "Publishing the GitHub release"
-if ! Scripts/publish-release.sh --notes "$NOTES" 2>&1 | sed 's/^/    /'; then
+if ! Scripts/publish-release.sh --notes "$ROOT/$NOTES" 2>&1 | sed 's/^/    /'; then
   die "Publishing failed. Run Scripts/release.sh again and pick $VERSION — it picks up from the build."
 fi
 
@@ -486,4 +521,5 @@ fi
 printf '\n%s✓ Edge %s is released.%s\n' "$GRN$B" "$VERSION" "$R"
 echo "    Release   https://github.com/$REPO/releases/tag/$TAG"
 echo "    Download  https://github.com/$REPO/releases/latest/download/Edge.dmg"
+echo "    Notes     $NOTES — edit, commit and push to change the release page"
 echo "    On your other Mac:  git pull"
