@@ -104,16 +104,20 @@ session, because both are read when one starts.
 ### Pairing
 
 Choose **Devices ▸ Connect to a nearby Mac…** on *both* Macs. Each shows the same six digits;
-confirm on both. That is the whole thing — there is nothing to type, and it works over Wi-Fi or
-over a cable between them.
+confirm on both. That is the whole thing — there is nothing to type.
+
+The two Macs need the **same Wi-Fi network** to find each other. A cable alone is not enough:
+mDNS does advertise over a Thunderbolt bridge, but the two Macs discovering *each other*
+across one proved unreliable — often in one direction only — so it is not offered. Pair once
+over Wi-Fi; the cable then carries the actual link, which is where its speed matters and where
+it is completely dependable.
 
 Neither Mac can end up with a key the other does not have: they agree one over the network, so
 either both save the same secret or neither saves anything.
 
-If this network blocks discovery, the waiting window lists **this Mac's own addresses** — type
-one of them into the other Mac under *Connect to a nearby Mac ▸ Enter the other Mac's
-address…*, and the same exchange happens over a direct connection. An address beginning
-`169.254` is the cable.
+If nothing is found, press **Search again**. For a network that blocks discovery entirely
+there is a terminal escape hatch — `continuous pair nearby --address <the other Mac>` — kept
+out of the menu because it is almost never the right answer.
 
 A pairing appears under **Devices** once it has connected.
 

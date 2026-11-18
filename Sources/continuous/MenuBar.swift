@@ -42,6 +42,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var lastIconSignature = ""
     private var blinkTimer: Timer?
     private var arrangementWindow: ArrangementWindowController?
+    private var pairingWindow: PairingWindowController?
     private var blinkOn = true
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
@@ -397,26 +398,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return detail
     }
 
-    /// Asks for one line of text, pre-filled.
     private func prompt(title: String, explanation: String, value: String,
                         placeholder: String, confirm: String) -> String? {
-        // Without this the field ignores every keystroke. A menu-bar app runs as an
-        // accessory and is never the active application, so its windows do not become key
-        // and nothing reaches the text field — it looks broken rather than inactive.
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = explanation
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        field.stringValue = value
-        field.placeholderString = placeholder
-        alert.accessoryView = field
-        alert.addButton(withTitle: confirm)
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        DispatchQueue.main.async { alert.window.makeFirstResponder(field) }
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        InputPanel.ask(title: title, explanation: explanation, value: value,
+                       placeholder: placeholder, confirm: confirm)
     }
 
     private func editPairing(labelled label: String, _ change: (inout Pairing) -> Void) {
@@ -512,140 +497,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func performPairNearby() {
         guard let identity = try? Identity.loadOrCreate() else { return }
         let config = (try? Config.load()) ?? Config()
-        runPairing(NetworkPairingSession(identity: identity, link: config.link),
-                   allowAddressFallback: true)
-    }
-
-    /// The modal half, shared by discovery and by dialling a known address.
-    private func runPairing(_ session: NetworkPairingSession, allowAddressFallback: Bool) {
-        // Labelled, because an unlabelled pair of addresses is a question rather than an
-        // answer. Both are shown: which one is wanted depends on how the two Macs are joined,
-        // and only the person looking knows that.
-        let addresses = NetworkAddress.localAddresses()
-        let cable = addresses.first(where: NetworkAddress.isLinkLocalIPv4)
-        let wifi = addresses.first(where: { !NetworkAddress.isLinkLocalIPv4($0) })
-        var here = ""
-        if let wifi { here += "\nNetwork:  \(wifi)" }
-        if let cable { here += "\nCable:      \(cable)" }
-
-        NSApp.activate(ignoringOtherApps: true)
-        let waiting = NSAlert()
-        waiting.messageText = "Looking for the other Mac"
-        waiting.informativeText =
-            "Choose the same on the other Mac. Both will show six digits to compare."
-            + (here.isEmpty ? "" : "\n\nThis Mac:\(here)")
-        waiting.addButton(withTitle: "Cancel")
-        if allowAddressFallback {
-            waiting.addButton(withTitle: "Enter the other Mac's address…")
-            // Not reachable for the first few seconds: finding each other is the normal path,
-            // and offering an escape hatch before it has had a chance to work invites people
-            // to take it.
-            if let button = waiting.buttons.last {
-                button.isEnabled = false
-                Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { _ in
-                    button.isEnabled = true
-                }
+        if pairingWindow == nil {
+            let controller = PairingWindowController(identity: identity, link: config.link)
+            controller.onPaired = { [weak self] outcome in
+                self?.save(outcome)
+                self?.pairingWindow = nil
             }
+            pairingWindow = controller
         }
-
-        // The alert is modal, so progress has to arrive as a dismissal rather than an update.
-        let result = Box<NetworkPairingSession.Progress?>(nil)
-        session.onProgress = { progress in
-            switch progress {
-            case .waiting, .found:
-                break
-            case .verify, .done, .failed:
-                result.value = progress
-                NSApp.abortModal()
-            }
-        }
-        session.start()
-
-        let response = waiting.runModal()
-        guard let outcome = result.value else {
-            session.cancel()
-            if allowAddressFallback, response == .alertSecondButtonReturn {
-                pairNearbyByAddress()
-            }
-            return
-        }
-
-        guard case let .verify(digits, peerName) = outcome else {
-            if case let .failed(reason) = outcome { notify("Pairing failed", reason) }
-            session.cancel()
-            return
-        }
-
-        let compare = NSAlert()
-        compare.messageText = digits
-        compare.informativeText = "Does \(peerName) show the same number? Confirm on both."
-        compare.addButton(withTitle: "Yes, they match")
-        compare.addButton(withTitle: "No")
-
-        let finish = Box<NetworkPairingSession.Progress?>(nil)
-        session.onProgress = { progress in
-            switch progress {
-            case .done, .failed:
-                finish.value = progress
-                NSApp.abortModal()
-            default:
-                break
-            }
-        }
-
-        guard compare.runModal() == .alertFirstButtonReturn else {
-            session.confirm(false)
-            return
-        }
-        session.confirm(true)
-
-        // Wait for the other Mac to confirm too.
-        let patience = NSAlert()
-        patience.messageText = "Waiting for \(peerName)"
-        patience.informativeText = "Confirm the number over there."
-        patience.addButton(withTitle: "Cancel")
-        if finish.value == nil {
-            if patience.runModal() == .alertFirstButtonReturn, finish.value == nil {
-                session.cancel()
-                return
-            }
-        }
-
-        switch finish.value {
-        case let .done(result):
-            save(result)
-        case let .failed(reason):
-            notify("Pairing failed", reason)
-        default:
-            notify("Pairing did not finish", "The other Mac did not confirm.")
-        }
-    }
-
-    /// Same exchange, but dialling an address instead of waiting to discover one.
-    ///
-    /// This is the whole reason a typed code existed, and it is a much smaller thing to ask
-    /// for: an address is visible in the other Mac's own menu, and getting it wrong fails
-    /// immediately instead of looking like a successful pairing that will not connect.
-    @objc private func pairNearbyByAddress() {
-        // Deferred by one turn of the run loop so menu tracking ends first; a window opened
-        // while the menu is still tracking never becomes key, and its text fields silently
-        // ignore every keystroke.
-        DispatchQueue.main.async { [weak self] in self?.performPairByAddress() }
-    }
-
-    private func performPairByAddress() {
-        guard let address = prompt(
-            title: "The other Mac's address",
-            explanation: "Choose Connect to a nearby Mac over there; it shows its address.",
-            value: "",
-            placeholder: "192.168.1.42",
-            confirm: "Connect"), !address.isEmpty else { return }
-
-        guard let identity = try? Identity.loadOrCreate() else { return }
-        let config = (try? Config.load()) ?? Config()
-        runPairing(NetworkPairingSession(identity: identity, link: config.link,
-                                         address: address),
-                    allowAddressFallback: false)
+        pairingWindow?.present()
     }
 
     private func save(_ outcome: NetworkPairing.Outcome) {

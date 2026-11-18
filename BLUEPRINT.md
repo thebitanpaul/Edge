@@ -546,6 +546,33 @@ glance and an ASCII diagram in an alert does not. The controls are editable on t
 only, since the arrangement decides where *that* Mac's pointer goes and the secondary has no
 say in it.
 
+#### Pairing stopped working, and the cause was an ordering nobody chose
+
+Reported as "nearby pairing is not working at all — only the address dialog shows". The
+sequence was `session.start()` and then `alert.runModal()`. When the other Mac is *already*
+waiting it is found within milliseconds — before the modal begins — so `abortModal()` ran with
+no modal session and did nothing, and the window that opened immediately afterwards sat there
+for ever waiting for an event that had already happened. It failed precisely when both people
+did the right thing at the same time.
+
+Three chained alerts have been replaced by one window that updates in place. There is no
+ordering to get wrong: state arrives, the window redraws. It carries a **Search again** button,
+and the digits appear in it rather than in a separate dialog.
+
+The same change fixes the text field, for the third time of asking and this time at the cause:
+a field inside an alert opened from a menu never becomes first responder, because the window is
+created while AppKit is still tracking the menu and never becomes key. Owning the window means
+the responder can simply be set once it is on screen. `NSAlert` is no longer used for anything
+that takes typing.
+
+**And a feature removed rather than fixed.** Pairing over a cable is gone. `mDNS` does
+advertise on a Thunderbolt interface — that was measured, on interface index 23 — but the two
+Macs discovering *each other* across a direct bridge proved unreliable, in one direction only,
+which is the worst way for something to half-work. Pairing once over Wi-Fi always works and
+costs nothing; the cable then carries the link, where its speed is the point and where it is
+entirely dependable. The manual address survives only as a terminal flag, out of the menu,
+because in a user interface it is almost never the right answer.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 
