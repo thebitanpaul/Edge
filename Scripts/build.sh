@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Builds `continuous` and wraps it in Continuous.app.
+# Builds `edge` and wraps it in Edge.app.
 #
 # The bundle is not decoration. macOS attributes Accessibility and Input Monitoring grants to
 # the *bundle*, so running the bare binary from a terminal would attach those permissions to
@@ -9,7 +9,7 @@
 # Usage:
 #   Scripts/build.sh            release build + app bundle
 #   Scripts/build.sh --debug    debug build + app bundle
-#   Scripts/build.sh --install  also symlink `continuous` into /usr/local/bin
+#   Scripts/build.sh --install  also symlink `edge` into /usr/local/bin
 
 set -euo pipefail
 
@@ -27,19 +27,27 @@ for arg in "$@"; do
   esac
 done
 
-BUNDLE_ID="app.continuous.cli"
-APP="$ROOT/build/Continuous.app"
-ICON="$ROOT/Resources/Continuous.icns"
+BUNDLE_ID="app.edge.cli"
+APP="$ROOT/build/Edge.app"
+ICON="$ROOT/Resources/Edge.icns"
 # A self-signed identity created by Scripts/create-signing-identity.sh, if the user made one.
-SIGNING_IDENTITY="Continuous Local Signing"
+# The old name is accepted too: what matters is that the identity is stable, not what it is
+# called, and making people re-run the script for a rename would be a rebuild's worth of
+# re-ticking privacy checkboxes for nothing.
+SIGNING_IDENTITY="Edge Local Signing"
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
+  if security find-identity -v -p codesigning 2>/dev/null | grep -q "Continuous Local Signing"; then
+    SIGNING_IDENTITY="Continuous Local Signing"
+  fi
+fi
 
 echo "==> Building ($CONFIG)"
 swift build -c "$CONFIG"
-BIN="$(swift build -c "$CONFIG" --show-bin-path)/continuous"
+BIN="$(swift build -c "$CONFIG" --show-bin-path)/edge"
 test -x "$BIN" || { echo "build produced no binary at $BIN" >&2; exit 1; }
 
 VERSION="$("$BIN" --version | awk '{print $2}')"
-# Stamped into the bundle so `continuous --version` can say exactly which commit is running.
+# Stamped into the bundle so `edge --version` can say exactly which commit is running.
 # Three fixes for the same bug have now been reported against builds whose provenance was
 # unclear; this removes that question.
 COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -49,10 +57,10 @@ BUILT_AT="$(date -u '+%Y-%m-%d %H:%M UTC')"
 echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/continuous"
+cp "$BIN" "$APP/Contents/MacOS/edge"
 
 if [ -f "$ICON" ]; then
-  cp "$ICON" "$APP/Contents/Resources/Continuous.icns"
+  cp "$ICON" "$APP/Contents/Resources/Edge.icns"
 else
   echo "    note: no icon at $ICON — run: swift Scripts/make-icon.swift"
 fi
@@ -62,30 +70,31 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>                   <string>Continuous</string>
-    <key>CFBundleDisplayName</key>            <string>Continuous</string>
+    <key>CFBundleName</key>                   <string>Edge</string>
+    <key>CFBundleDisplayName</key>            <string>Edge</string>
     <key>CFBundleIdentifier</key>             <string>$BUNDLE_ID</string>
-    <key>CFBundleExecutable</key>             <string>continuous</string>
-    <key>CFBundleIconFile</key>               <string>Continuous</string>
+    <key>CFBundleExecutable</key>             <string>edge</string>
+    <key>CFBundleIconFile</key>               <string>Edge</string>
     <key>CFBundlePackageType</key>            <string>APPL</string>
     <key>CFBundleShortVersionString</key>     <string>$VERSION</string>
     <key>CFBundleVersion</key>                <string>$VERSION</string>
-    <key>ContinuousCommit</key>               <string>$COMMIT</string>
-    <key>ContinuousBuiltAt</key>              <string>$BUILT_AT</string>
+    <key>EdgeCommit</key>               <string>$COMMIT</string>
+    <key>EdgeBuiltAt</key>              <string>$BUILT_AT</string>
     <key>LSMinimumSystemVersion</key>         <string>13.0</string>
     <!-- No Dock icon, no menu bar: this is a background tool driven from the CLI. -->
     <key>LSUIElement</key>                    <true/>
     <key>NSHumanReadableCopyright</key>       <string>Local-only keyboard and mouse sharing. No network destination other than your own paired Mac.</string>
     <key>NSInputMonitoringUsageDescription</key>
-        <string>Continuous reads keyboard and pointer events so it can forward them to your other Mac.</string>
+        <string>Edge reads keyboard and pointer events so it can forward them to your other Mac.</string>
     <!-- macOS 15 and later gate both Bonjour discovery and outbound connections to LAN
          addresses behind the Local Network permission. Without this key the connection to
          your other Mac fails with no visible error. -->
     <key>NSLocalNetworkUsageDescription</key>
-        <string>Continuous connects directly to your other Mac on your local network. It never contacts any other server.</string>
+        <string>Edge connects directly to your other Mac on your local network. It never contacts any other server.</string>
     <key>NSBonjourServices</key>
         <array>
-            <string>_continuous._tcp</string>
+            <string>_edge._tcp</string>
+            <string>_edge-pair._tcp</string>
         </array>
 </dict>
 </plist>
@@ -108,7 +117,7 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
   # waits for it indefinitely. A build that hangs with no explanation is worse than one that
   # falls back, so give it a deadline and say what to do.
   codesign --force --sign "$SIGNING_IDENTITY" --identifier "$BUNDLE_ID" \
-           --options runtime --timestamp=none "$APP" >/tmp/continuous-codesign.log 2>&1 &
+           --options runtime --timestamp=none "$APP" >/tmp/edge-codesign.log 2>&1 &
   CODESIGN_PID=$!
   WAITED=0
   while kill -0 "$CODESIGN_PID" 2>/dev/null && [ "$WAITED" -lt 20 ]; do
@@ -134,9 +143,9 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
     echo
     codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
   else
-    sed 's/^/    /' /tmp/continuous-codesign.log
+    sed 's/^/    /' /tmp/edge-codesign.log
   fi
-  rm -f /tmp/continuous-codesign.log
+  rm -f /tmp/edge-codesign.log
 else
   echo "==> Signing (ad-hoc)"
   codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1 | sed 's/^/    /'
@@ -146,31 +155,31 @@ else
 fi
 codesign --verify --verbose=1 "$APP" 2>&1 | sed 's/^/    /'
 
-# A tiny launcher so `continuous` on your PATH runs the *bundled* copy, keeping one code
+# A tiny launcher so `edge` on your PATH runs the *bundled* copy, keeping one code
 # identity and therefore one set of permission grants.
 mkdir -p "$ROOT/build"
-cat > "$ROOT/build/continuous" <<LAUNCHER
+cat > "$ROOT/build/edge" <<LAUNCHER
 #!/bin/bash
-exec "$APP/Contents/MacOS/continuous" "\$@"
+exec "$APP/Contents/MacOS/edge" "\$@"
 LAUNCHER
-chmod +x "$ROOT/build/continuous"
+chmod +x "$ROOT/build/edge"
 
 echo "==> Built $APP  (commit $COMMIT)"
-echo "    binary  $(du -h "$APP/Contents/MacOS/continuous" | cut -f1)"
-echo "    launcher $ROOT/build/continuous"
+echo "    binary  $(du -h "$APP/Contents/MacOS/edge" | cut -f1)"
+echo "    launcher $ROOT/build/edge"
 
 if [ "$INSTALL" = "1" ]; then
-  DEST="/usr/local/bin/continuous"
+  DEST="/usr/local/bin/edge"
   echo "==> Installing launcher to $DEST"
   if [ -w "$(dirname "$DEST")" ]; then
-    ln -sf "$ROOT/build/continuous" "$DEST"
+    ln -sf "$ROOT/build/edge" "$DEST"
   else
-    sudo ln -sf "$ROOT/build/continuous" "$DEST"
+    sudo ln -sf "$ROOT/build/edge" "$DEST"
   fi
-  echo "    $DEST -> $ROOT/build/continuous"
+  echo "    $DEST -> $ROOT/build/edge"
 fi
 
 echo
 echo "Next:"
-echo "    $ROOT/build/continuous selftest"
-echo "    $ROOT/build/continuous doctor"
+echo "    $ROOT/build/edge selftest"
+echo "    $ROOT/build/edge doctor"

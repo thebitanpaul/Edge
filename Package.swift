@@ -2,25 +2,25 @@
 import PackageDescription
 
 let package = Package(
-    name: "Continuous",
+    name: "Edge",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "continuous", targets: ["continuous"]),
-        .library(name: "ContinuousCore", targets: ["ContinuousCore"]),
+        .executable(name: "edge", targets: ["edge"]),
+        .library(name: "EdgeCore", targets: ["EdgeCore"]),
     ],
     targets: [
         .target(
-            name: "ContinuousCore",
+            name: "EdgeCore",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "continuous",
-            dependencies: ["ContinuousCore"],
+            name: "edge",
+            dependencies: ["EdgeCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "ContinuousCoreTests",
-            dependencies: ["ContinuousCore"],
+            name: "EdgeCoreTests",
+            dependencies: ["EdgeCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

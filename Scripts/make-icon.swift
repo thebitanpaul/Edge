@@ -1,6 +1,6 @@
 #!/usr/bin/env swift
 //
-// Draws Continuous.app's icon and writes Resources/Continuous.icns.
+// Draws Edge.app's icon and writes Resources/Edge.icns.
 //
 // Generated rather than committed as an opaque binary: the shapes are legible in the diff,
 // the whole thing regenerates with one command, and nobody has to open an image editor to
@@ -16,8 +16,8 @@ import ImageIO
 import UniformTypeIdentifiers
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-let iconset = root.appendingPathComponent("build/Continuous.iconset")
-let output = root.appendingPathComponent("Resources/Continuous.icns")
+let iconset = root.appendingPathComponent("build/Edge.iconset")
+let output = root.appendingPathComponent("Resources/Edge.icns")
 
 // MARK: - Shapes
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Creates a self-signed code-signing certificate so Continuous.app keeps a stable identity.
+# Creates a self-signed code-signing certificate so Edge.app keeps a stable identity.
 #
 # Why you want this: macOS keys Accessibility and Input Monitoring grants to an app's code
 # identity. With an ad-hoc signature that identity is a hash of the app's contents, so every
@@ -10,13 +10,13 @@
 # The certificate is yours, lives in your login keychain, is trusted by nothing except your own
 # Mac, and can be removed at any time:
 #
-#     security delete-certificate -c "Continuous Local Signing"
+#     security delete-certificate -c "Edge Local Signing"
 #
 # Usage:  Scripts/create-signing-identity.sh [--keychain PATH]
 
 set -euo pipefail
 
-NAME="Continuous Local Signing"
+NAME="Edge Local Signing"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 while [ $# -gt 0 ]; do
@@ -40,7 +40,7 @@ echo "==> Generating a self-signed code-signing certificate"
 # basicConstraints CA:false and the codeSigning EKU are what make codesign accept it at all.
 openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
   -keyout "$WORK/key.pem" -out "$WORK/cert.pem" \
-  -subj "/CN=$NAME/O=Continuous" \
+  -subj "/CN=$NAME/O=Edge" \
   -addext "basicConstraints=critical,CA:false" \
   -addext "keyUsage=critical,digitalSignature" \
   -addext "extendedKeyUsage=critical,codeSigning" 2>/dev/null

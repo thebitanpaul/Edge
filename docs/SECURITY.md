@@ -107,7 +107,7 @@ keys, for the same reason.
 
 ## What is verified, and how
 
-`continuous selftest` runs the whole stack over loopback and checks the rejection paths, not
+`edge selftest` runs the whole stack over loopback and checks the rejection paths, not
 just the happy one:
 
 * a handshake with the correct key succeeds, and reports the negotiated suite

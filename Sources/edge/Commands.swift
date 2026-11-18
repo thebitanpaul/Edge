@@ -1,0 +1,315 @@
+import Foundation
+import Network
+import EdgeCore
+
+enum Commands {
+
+    // MARK: - id
+
+    static func identity(_ args: Args) throws {
+        let id = try Identity.loadOrCreate()
+        out(Style.bold("This Mac"))
+        out("  name       \(id.deviceName)")
+        out("  device id  \(Style.cyan(id.deviceID.description))")
+        out("  created    \(ISO8601DateFormatter().string(from: id.createdAt))")
+        out("  state dir  \(Paths.supportDirectory.path)")
+    }
+
+    // MARK: - doctor
+
+    static func doctor(_ args: Args) throws {
+        let id = try Identity.loadOrCreate()
+        let config = try Config.load()
+
+        out(Style.bold("Edge \(Runtime.version)"))
+        out()
+
+        out(Style.bold("Identity"))
+        out("  \(id.deviceName)  ·  \(Style.cyan(id.deviceID.description))")
+        out()
+
+        out(Style.bold("Storage"))
+        let dir = Paths.supportDirectory.path
+        out("  \(dir)")
+        if ProcessInfo.processInfo.environment[Paths.overrideVariable] != nil {
+            info("location set by \(Paths.overrideVariable)")
+        }
+        for url in [Paths.identityFile, Paths.configFile, Paths.secretsFile] {
+            let name = url.lastPathComponent
+            if FileManager.default.fileExists(atPath: url.path) {
+                let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+                let mode = (attrs?[.posixPermissions] as? NSNumber)?.int16Value ?? 0
+                let modeText = String(format: "%04o", mode & 0o777)
+                let secure = (mode & 0o077) == 0
+                if secure { ok("\(name) present, mode \(modeText)") }
+                else { bad("\(name) mode \(modeText) is too permissive — run: chmod 600 \(url.path)") }
+            } else {
+                info("\(name) not created yet")
+            }
+        }
+        out()
+
+        out(Style.bold("Pairings"))
+        do {
+            let store = try SecretStore.load()
+            if store.pairings.isEmpty {
+                warn("none — run `edge pair init` on the Mac that will lend its screen")
+            } else {
+                for p in store.pairings {
+                    ok("\(p.label)  ·  key \(String(p.keyIDHex.prefix(8)))  ·  \(p.statusText)")
+                }
+            }
+        } catch {
+            bad("\(error.localizedDescription)")
+        }
+        out()
+
+        out(Style.bold("Permissions"))
+        let ax = Permissions.accessibility()
+        let im = Permissions.inputMonitoring()
+        if ax.isGranted { ok("Accessibility: granted") }
+        else { warn("Accessibility: \(ax) — needed from milestone 2 onwards") }
+        if im.isGranted { ok("Input Monitoring: granted") }
+        else { warn("Input Monitoring: \(im) — needed from milestone 3 onwards") }
+        if Permissions.isRunningInsideAppBundle {
+            ok("running from an .app bundle (permissions attach to Edge)")
+        } else {
+            info("running as a bare binary — permissions would attach to your terminal;")
+            info("build the bundle with Scripts/build.sh before granting them")
+        }
+        // macOS does not expose the Local Network grant to the process that needs it, so the
+        // only honest thing to say is where to look.
+        info("Local Network: macOS asks the first time you connect. If the other Mac is")
+        info("reachable but every link times out, check System Settings ▸ Privacy & Security ▸")
+        info("Local Network and make sure Edge is on and ticked.")
+        out()
+
+        out(Style.bold("Network"))
+        out("  listen port           \(config.port == 0 ? "auto" : String(config.port))")
+        out("  local network only    \(config.requireLocalNetwork ? "yes" : Style.yellow("NO — accepting any address"))")
+        out("  bonjour               \(config.bonjourEnabled ? "enabled" : "disabled")")
+        for (name, addr) in LocalInterfaces.list() {
+            out("  \(Style.dim(name.padding(toLength: 10, withPad: " ", startingAt: 0)))\(addr)")
+        }
+    }
+
+    // MARK: - pair
+
+    static func pair(_ args: Args) throws {
+        let sub = args.arg(0) ?? "list"
+        switch sub {
+        case "nearby", "network": try pairNearby(args)
+        case "init", "join": try pairByCodeRemoved()
+        case "list":   try pairList(args)
+        case "forget": try pairForget(args)
+        default:
+            throw EdgeError.invalidArgument("unknown `pair` subcommand '\(sub)' — expected nearby, list or forget")
+        }
+    }
+
+    /// `edge pair nearby` — the same exchange the menu bar runs.
+    private static func pairNearby(_ args: Args) throws {
+        let identity = try Identity.loadOrCreate()
+        let config = try Config.load()
+        let session = NetworkPairingSession(identity: identity, link: config.link,
+                                            address: args.string("address"))
+
+        out()
+        info("looking for another Mac that is also pairing…")
+        out(Style.dim("  Run `edge pair nearby` on the other Mac too, within two minutes."))
+        out()
+        let addresses = NetworkAddress.localAddresses()
+        if !addresses.isEmpty {
+            out("  This Mac:")
+            if let wifi = addresses.first(where: { !NetworkAddress.isLinkLocalIPv4($0) }) {
+                out("    network  \(Style.cyan(wifi))")
+            }
+            if let cable = addresses.first(where: NetworkAddress.isLinkLocalIPv4) {
+                out("    cable    \(Style.cyan(cable))")
+            }
+            out(Style.dim("    (only needed if the two Macs cannot find each other:"))
+            out(Style.dim("     edge pair nearby --address <the other Mac's address>)"))
+            out()
+        }
+
+        let state = Box<NetworkPairingSession.Progress?>(nil)
+        session.onProgress = { state.value = $0 }
+        session.start()
+
+        guard Runtime.wait(until: {
+            if case .verify = state.value { return true }
+            if case .failed = state.value { return true }
+            return false
+        }, timeout: NetworkPairing.window + 5) else {
+            session.cancel()
+            throw EdgeError.timedOut("no other Mac started pairing")
+        }
+
+        if case let .failed(reason) = state.value {
+            throw EdgeError.invalidArgument(reason)
+        }
+        guard case let .verify(digits, peerName) = state.value else {
+            throw EdgeError.invalidArgument("pairing did not get started")
+        }
+
+        out()
+        out("  Found \(Style.bold(peerName)). Both Macs should show:")
+        out()
+        out("      \(Style.cyan(Style.bold(digits)))")
+        out()
+        out("  If \(peerName) shows the same six digits, nothing is between them.")
+        out("  Confirm on both Macs.")
+        out()
+
+        // No tty check: whether a person can answer is settled by whether an answer arrives.
+        // Requiring a terminal also rules out piping one in, which is the only way this can
+        // be tested without two people and two Macs.
+        print("  Do the numbers match? [y/N] ", terminator: "")
+        guard let line = readLine() else {
+            session.cancel()
+            throw EdgeError.invalidArgument(
+                "nothing to read an answer from — run this where you can confirm the number")
+        }
+        let answer = line.lowercased().trimmingCharacters(in: .whitespaces)
+        guard answer == "y" || answer == "yes" else {
+            session.confirm(false)
+            throw EdgeError.invalidArgument("pairing cancelled")
+        }
+        session.confirm(true)
+
+        info("waiting for \(peerName) to confirm…")
+        guard Runtime.wait(until: {
+            if case .done = state.value { return true }
+            if case .failed = state.value { return true }
+            return false
+        }, timeout: 120) else {
+            session.cancel()
+            throw EdgeError.timedOut("\(peerName) did not confirm")
+        }
+
+        if case let .failed(reason) = state.value {
+            throw EdgeError.invalidArgument(reason)
+        }
+        guard case let .done(outcome) = state.value else {
+            throw EdgeError.invalidArgument("pairing did not finish")
+        }
+
+        var store = try SecretStore.load()
+        // Replace rather than accumulate: a leftover from a failed attempt only makes the
+        // next connection ambiguous.
+        store.pairings.removeAll { $0.peerName == outcome.peerName || !$0.isBound }
+        var pairing = Pairing(psk: outcome.psk, label: outcome.peerName)
+        pairing.peerName = outcome.peerName
+        store.pairings.append(pairing)
+        try store.save()
+
+        out()
+        ok("paired with \(outcome.peerName)  ·  key \(String(pairing.keyIDHex.prefix(8)))")
+        info("both Macs derived the same key, so they cannot differ")
+        out(Style.dim("  Now set one Mac to share its keyboard and the other to lend its screen,"))
+        out(Style.dim("  then start both:  edge connect   /   edge listen"))
+    }
+
+    /// Kept only to explain where it went.
+    ///
+    /// Typing a code was removed rather than improved. It is two manual actions with no
+    /// feedback until a connection succeeds, so a mismatch — re-pairing one Mac and not the
+    /// other — presents as a mistyped code, and the obvious response of re-pairing recreates
+    /// it. `pair nearby` has neither failure: both Macs derive the same key or neither saves
+    /// anything, and it works over a cable as well as over Wi-Fi.
+    private static func pairByCodeRemoved() throws -> Never {
+        throw EdgeError.invalidArgument("""
+            pairing by code has been removed.
+              Use:  edge pair nearby        on both Macs
+              It works over Wi-Fi or a cable between them, derives the same key on both, and
+              shows six digits to compare. There is nothing to type.
+            """)
+    }
+
+    private static func pairList(_ args: Args) throws {
+        let store = try SecretStore.load()
+        guard !store.pairings.isEmpty else {
+            warn("no pairings yet")
+            out(Style.dim("  edge pair init          on the Mac that lends its screen"))
+            out(Style.dim("  edge pair join <CODE>   on the Mac with the keyboard"))
+            return
+        }
+        let pending = store.pairings.filter { !$0.isBound }.count
+        if pending > 0 {
+            info("\(pending) pairing\(pending == 1 ? "" : "s") set up but never used — "
+                 + "they are not paired Macs until a connection succeeds")
+        }
+        out(Style.bold("  LABEL                 KEY       PEER                  LAST SEEN     ENDPOINT"))
+        for p in store.pairings {
+            let label = p.label.padding(toLength: 20, withPad: " ", startingAt: 0)
+            let key = String(p.keyIDHex.prefix(8))
+            let peer = (p.peerDeviceID.map { "\($0.short) \(p.peerName ?? "")" } ?? "— unbound —")
+                .padding(toLength: 20, withPad: " ", startingAt: 0)
+            let seen = relativeTime(p.lastSeenAt).padding(toLength: 12, withPad: " ", startingAt: 0)
+            out("  \(label)  \(key)  \(peer)  \(seen)  \(p.lastEndpoint ?? "")")
+        }
+    }
+
+    private static func pairForget(_ args: Args) throws {
+        let needle = try args.require(1, "LABEL|KEY|DEVICE-ID")
+        var store = try SecretStore.load()
+        let idx = try store.index(matching: needle)
+        let removed = store.pairings.remove(at: idx)
+        try store.save()
+        ok("forgot pairing '\(removed.label)' — that key will no longer be accepted")
+    }
+
+    // MARK: - discover
+
+    static func discover(_ args: Args) throws {
+        let timeout = try args.double("timeout") ?? 3
+        info("browsing for \(LinkListener.bonjourServiceType) for \(Int(timeout))s…")
+        let peers = Discovery.scan(duration: timeout)
+        guard !peers.isEmpty else {
+            warn("nothing found")
+            out(Style.dim("  Make sure `edge listen` is running on the other Mac and both are on the same network."))
+            out(Style.dim("  Bonjour does not cross most corporate VLANs — you can always connect by IP address."))
+            return
+        }
+        out(Style.bold("  NAME                            DEVICE ID    ROLE"))
+        for p in peers {
+            let name = p.serviceName.padding(toLength: 30, withPad: " ", startingAt: 0)
+            let id = (p.deviceID?.short ?? "—").padding(toLength: 11, withPad: " ", startingAt: 0)
+            out("  \(name)  \(id)  \(p.role ?? "—")")
+        }
+        out()
+        out(Style.dim("  Connect with:  edge connect \"<NAME>\""))
+    }
+}
+
+// MARK: - Interface listing for `doctor`
+
+enum LocalInterfaces {
+    /// Non-loopback IPv4 addresses, so the user can see which address to type on the other Mac.
+    static func list() -> [(String, String)] {
+        var result: [(String, String)] = []
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return result }
+        defer { freeifaddrs(head) }
+
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let cur = ptr {
+            defer { ptr = cur.pointee.ifa_next }
+            let flags = Int32(cur.pointee.ifa_flags)
+            guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0 else { continue }
+            guard let sa = cur.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let size = socklen_t(sa.pointee.sa_len)
+            guard getnameinfo(sa, size, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
+            else { continue }
+
+            let name = String(cString: cur.pointee.ifa_name)
+            let addr = String(cString: host)
+            // bridge* is what a Thunderbolt / USB-C cable between two Macs shows up as.
+            let note = name.hasPrefix("bridge") ? "  \(Style.dim("(thunderbolt / usb-c bridge)"))" : ""
+            result.append((name, addr + note))
+        }
+        return result
+    }
+}

@@ -1,4 +1,4 @@
-# Continuous — Blueprint
+# Edge — Blueprint
 
 Share one keyboard + mouse between two Macs that **cannot** share an Apple ID.
 Everything runs on your own machines. Nothing talks to any server but the other Mac.
@@ -21,7 +21,7 @@ with keyboard input following it. Sub-frame latency on a LAN. Negligible CPU whe
 | A paired-but-untrusted peer, or a stolen pairing code | Explicit peer allowlist keyed by device ID; `pair forget` revokes. |
 | Third party reading my keystrokes | No third party exists. No analytics, no update check, no outbound connection other than to the paired peer. |
 | A pairing code that leaks after it has been used | A pairing pins itself to the first Mac that completes a handshake and refuses any other device afterwards. |
-| Secrets at rest | `~/Library/Application Support/Continuous/secrets.json`, mode `0600`, refuses to load if permissions are looser (same discipline as `~/.ssh`). |
+| Secrets at rest | `~/Library/Application Support/Edge/secrets.json`, mode `0600`, refuses to load if permissions are looser (same discipline as `~/.ssh`). |
 | Accidental exposure to the internet | The listener refuses peers that are neither on a private address nor on a subnet this Mac is directly attached to, unless explicitly overridden. |
 
 **What we are NOT defending against:** another process running as *you* on your own Mac.
@@ -63,7 +63,7 @@ shows up as a normal network interface (`bridge0`), so the exact same code path 
   └───────────────────────────────────────────────────┘
 ```
 
-* **Client listens and advertises** over Bonjour (`_continuous._tcp`); **host browses and connects**.
+* **Client listens and advertises** over Bonjour (`_edge._tcp`); **host browses and connects**.
   The host is the one making the decision "attach that screen to my left edge", so it is the one
   that initiates.
 * The **host owns the cursor position on both screens.** It tracks a virtual cursor inside the
@@ -104,7 +104,7 @@ Two details that matter in practice:
 * **Alignment, when the screens are different heights.** The default is `proportional`: the
   pointer leaves at the same fraction of the way down the edge as it arrives. With fixed
   alignments, parts of a taller screen simply cannot be reached from a shorter one.
-  `continuous layout set right center` if you prefer straight-line crossings.
+  `edge layout set right center` if you prefer straight-line crossings.
 
 Both sides watch for display reconfiguration and re-send their layout, so switching the monitor
 updates the arrangement without reconnecting.
@@ -129,8 +129,8 @@ silent downgrade cannot happen unnoticed.
 | Client | Accessibility | synthesize events into other apps |
 | Both | Local Network | macOS 15+ gates Bonjour *and* outbound LAN connections; the bundle declares `NSLocalNetworkUsageDescription` |
 
-The binary ships inside a real `Continuous.app` bundle (`LSUIElement`, no Dock icon) so macOS
-attributes those grants to *Continuous* rather than to Terminal.
+The binary ships inside a real `Edge.app` bundle (`LSUIElement`, no Dock icon) so macOS
+attributes those grants to *Edge* rather than to Terminal.
 
 ---
 
@@ -142,23 +142,23 @@ Each milestone ends in something you can run and verify by yourself.
 Device identity, pairing codes, secret storage, ECDHE-PSK transport, mutual HMAC
 challenge/response, device pinning, framed codec, Bonjour discovery, RTT measurement,
 `doctor` + `selftest`. 41 unit tests; 13 end-to-end checks including both rejection paths.
-**Verify:** `continuous selftest` passes on one Mac; then pair the two Macs and
-`continuous connect` reports a live link with a round-trip time.
+**Verify:** `edge selftest` passes on one Mac; then pair the two Macs and
+`edge connect` reports a live link with a round-trip time.
 
 ### ✅ M2 — Injection and screen geometry  *(delivered)*
 `CGEventPost` synthesis on the receiving Mac: absolute pointer moves, drag, buttons with click
 counts, scroll, keys by virtual key code, modifier changes, and a release-everything safety net
 for a link that drops mid-drag. Display enumeration on both sides, live `screenInfo` exchange,
 reconfiguration watching, and the combined-desktop maths with an ASCII plan of the arrangement.
-**Verify:** `continuous inject-test` moves this Mac's own pointer; `continuous remote-test`
-drives the *other* Mac's pointer across the link; `continuous layout` draws the arrangement.
+**Verify:** `edge inject-test` moves this Mac's own pointer; `edge remote-test`
+drives the *other* Mac's pointer across the link; `edge layout` draws the arrangement.
 
 ### ✅ M3 — Capture & edge switching  *(delivered)*
 `CGEventTap` in active mode on the sending Mac: pointer, buttons, drag, scroll, keys and
 modifiers are consumed and forwarded while the pointer is away. The hardware is detached from
 the local pointer so movement arrives as deltas, the local cursor is parked and hidden, and the
 switch at the shared edge is driven by the M2 layout.
-**Verify:** `continuous capture-test` proves this Mac can capture; then `continuous connect`
+**Verify:** `edge capture-test` proves this Mac can capture; then `edge connect`
 and push the pointer off the edge towards the other Mac.
 
 #### Not being able to get your Mac back is the real failure mode
@@ -236,7 +236,7 @@ Both are now in one function, `LocalPointer.beginCapture`, because the ordering 
 difficulty and three separate calls is three chances to get it wrong. And because
 `CGDisplayHideCursor` lies about what it did, the capture asks the window server afterwards —
 via `CGCursorIsVisible`, withdrawn from the SDK but still present — and reports
-`cursor confirmed hidden` or `CURSOR STILL VISIBLE`. `continuous capture-test` prints it.
+`cursor confirmed hidden` or `CURSOR STILL VISIBLE`. `edge capture-test` prints it.
 
 The lesson, recorded because it was expensive: five attempts, four of them reasoned from
 documentation and measurements, against an API that reports success for work it did not do.
@@ -254,8 +254,8 @@ same binary with `connect` or `listen` — and the menu watches the state file t
 already publishes. Two reasons that is worth an extra process: a session that dies takes the
 pointer with it but not the interface, so there is always something left to click *Start* on;
 and there is exactly one implementation of a session, so what you debug from the terminal is
-what the menu runs. Double-clicking the app, or `open -a Continuous`, starts it; typing
-`continuous` in a shell still prints the usage, because there a person is waiting to read it.
+what the menu runs. Double-clicking the app, or `open -a Edge`, starts it; typing
+`edge` in a shell still prints the usage, because there a person is waiting to read it.
 
 **Clipboard sharing is off by default, and that is the point.** Whatever you last copied is
 frequently a password, and this sends it to the other machine every time it changes. It is
@@ -609,8 +609,8 @@ Dead keys and input methods, drag-and-drop of files, a preferences window, per-p
 
 ```
 Package.swift
-Sources/ContinuousCore/      the library (transport, crypto, protocol, config)
-Sources/continuous/          the CLI front-end
-Tests/ContinuousCoreTests/   unit tests
+Sources/EdgeCore/      the library (transport, crypto, protocol, config)
+Sources/edge/          the CLI front-end
+Tests/EdgeCoreTests/   unit tests
 Scripts/                     build + app-bundle + launchagent helpers
 ```
