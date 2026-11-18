@@ -1,10 +1,10 @@
-"""Makes each GitHub release's text match release-notes/vX.Y.Z.md.
+"""Makes each GitHub release's text match release-notes/.
 
-Run by .github/workflows/release-notes.yml whenever a notes file changes on main. A release
-body is the notes, then the download link, install steps and checksum that
-Scripts/publish-release.sh adds, starting at the "### Download" heading. Only the part above
-that heading is replaced; the rest is kept as it is. (So don't use a "### Download" heading in
-the notes themselves.)
+Run by .github/workflows/release-notes.yml whenever anything in release-notes/ changes on main.
+A release body is release-notes/vX.Y.Z.md, then release-notes/install-section.md (download
+link, install steps, checksum), which starts at the "### Download" heading — the same as
+Scripts/publish-release.sh writes. Both parts are rewritten from the files; the checksum is
+carried over from the release as it was. (So don't use a "### Download" heading in the notes.)
 """
 
 import json
@@ -18,6 +18,8 @@ REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GH_TOKEN"]
 API = f"https://api.github.com/repos/{REPO}"
 FOOTER = re.compile(r"^### Download\s*$", re.M)
+CHECKSUM = re.compile(r"SHA-256 \(Edge\.dmg\) = ([0-9a-f]{64})")
+TEMPLATE = pathlib.Path("release-notes/install-section.md").read_text().strip()
 
 
 def call(method, url, data=None):
@@ -47,6 +49,9 @@ for path in sorted(pathlib.Path("release-notes").glob("v*.md")):
     body = (release.get("body") or "").replace("\r\n", "\n")
     match = FOOTER.search(body)
     footer = body[match.start():] if match else ""
+    checksum = CHECKSUM.search(footer)
+    if checksum:
+        footer = TEMPLATE.replace("{{SHA256}}", checksum.group(1)) + "\n"
     notes = path.read_text().strip()
     new_body = f"{notes}\n\n{footer}" if footer else f"{notes}\n"
     if new_body.strip() == body.strip():
