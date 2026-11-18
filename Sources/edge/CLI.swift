@@ -107,7 +107,7 @@ struct Args {
 enum Runtime {
     /// Just the number. The commit belongs in `--version`, where someone is asking, not in
     /// a menu where it is noise.
-    static let shortVersion = "0.2.0"
+    static let shortVersion = "1.0.0"
 
     /// Exit status meaning "macOS has not been told to let Edge do this".
     ///

@@ -10,6 +10,7 @@
 #   Scripts/build.sh            release build + app bundle
 #   Scripts/build.sh --debug    debug build + app bundle
 #   Scripts/build.sh --install  also symlink `edge` into /usr/local/bin
+#   Scripts/build.sh --universal  one app for both Apple silicon and Intel (used for releases)
 
 set -euo pipefail
 
@@ -18,11 +19,13 @@ ROOT="$PWD"
 
 CONFIG="release"
 INSTALL=0
+UNIVERSAL=0
 for arg in "$@"; do
   case "$arg" in
     --debug)   CONFIG="debug" ;;
     --release) CONFIG="release" ;;
     --install) INSTALL=1 ;;
+    --universal) UNIVERSAL=1 ;;
     *) echo "unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -59,15 +62,39 @@ for STALE in "$ROOT"/build/*; do
   fi
 done
 
-echo "==> Building ($CONFIG)"
 # Without Xcode, the default build system hands the linker two Xcode-only search paths that the
 # Command Line Tools do not have, and ld warns about each on every link. They are harmless and
 # nothing in this package can change them, so exactly those lines are dropped; every other
 # warning still shows. sed rather than grep -v: it succeeds on empty output, and pipefail
 # still reports a failed build.
-swift build -c "$CONFIG" 2>&1 \
-  | sed -E "/ld: warning: search path '[^']*CommandLineTools\/Developer\/[^']*' not found/d"
-BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
+quiet_build() {
+  swift build "$@" 2>&1 \
+    | sed -E "/ld: warning: search path '[^']*CommandLineTools\/Developer\/[^']*' not found/d"
+}
+
+if [ "$UNIVERSAL" = "1" ]; then
+  # One build per architecture, then lipo. Each gets its own scratch path: the build system
+  # writes every triple to the same Products folder, so a second build would silently replace
+  # the first one's binaries rather than sit beside them.
+  BIN_DIR="$ROOT/.build/universal-$CONFIG"
+  rm -rf "$BIN_DIR"
+  mkdir -p "$BIN_DIR"
+  for ARCH in arm64 x86_64; do
+    echo "==> Building ($CONFIG, $ARCH)"
+    SCRATCH="$ROOT/.build/arch-$ARCH"
+    quiet_build -c "$CONFIG" --triple "$ARCH-apple-macosx13.0" --scratch-path "$SCRATCH"
+    ARCH_BIN="$(swift build -c "$CONFIG" --triple "$ARCH-apple-macosx13.0" --scratch-path "$SCRATCH" --show-bin-path)"
+    cp "$ARCH_BIN/edge" "$BIN_DIR/edge-$ARCH"
+    cp "$ARCH_BIN/EdgeControls" "$BIN_DIR/EdgeControls-$ARCH"
+  done
+  lipo -create -output "$BIN_DIR/edge" "$BIN_DIR/edge-arm64" "$BIN_DIR/edge-x86_64"
+  lipo -create -output "$BIN_DIR/EdgeControls" "$BIN_DIR/EdgeControls-arm64" "$BIN_DIR/EdgeControls-x86_64"
+  echo "    $(lipo -archs "$BIN_DIR/edge")"
+else
+  echo "==> Building ($CONFIG)"
+  quiet_build -c "$CONFIG"
+  BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
+fi
 BIN="$BIN_DIR/edge"
 CONTROLS_BIN="$BIN_DIR/EdgeControls"
 test -x "$BIN" || { echo "build produced no binary at $BIN" >&2; exit 1; }
@@ -156,7 +183,9 @@ cp "$CONTROLS_BIN" "$APPEX/Contents/MacOS/EdgeControls"
 # built, so a rename cannot leave it pointing at a type that no longer exists.
 intent_type() {
   local found
-  found="$(nm "$CONTROLS_BIN" | sed -n "s/.* _\\\$s\\(12EdgeControls[0-9]*$1V\\)Mn\$/\\1/p")"
+  # A universal binary lists every symbol once per architecture, so keep the first. awk rather
+  # than head, which can exit early and fail the pipeline with SIGPIPE under pipefail.
+  found="$(nm "$CONTROLS_BIN" | sed -n "s/.* _\\\$s\\(12EdgeControls[0-9]*$1V\\)Mn\$/\\1/p" | awk 'NR == 1')"
   if [ -z "$found" ]; then
     echo "could not find EdgeControls.$1 in $CONTROLS_BIN — was it renamed?" >&2
     exit 1
