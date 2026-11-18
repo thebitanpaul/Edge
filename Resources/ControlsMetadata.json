@@ -1,5 +1,42 @@
 {
   "actions": {
+    "OptionsIntent": {
+      "assistantDefinedSchemaTraits": [],
+      "assistantDefinedSchemas": [],
+      "authenticationPolicy": 0,
+      "availabilityAnnotations": {
+        "LNPlatformNameWildcard": {
+          "introducedVersion": "*"
+        }
+      },
+      "effectiveBundleIdentifiers": [],
+      "fullyQualifiedTypeName": "EdgeControls.OptionsIntent",
+      "identifier": "OptionsIntent",
+      "isAuthPolExplicit": false,
+      "isDiscoverable": true,
+      "mangledTypeName": "__OPTIONS_INTENT_TYPE__",
+      "mangledTypeNameByBundleIdentifier": {},
+      "mangledTypeNameByBundleIdentifierV2": {},
+      "mangledTypeNameV2": "__OPTIONS_INTENT_TYPE__",
+      "openAppWhenRun": false,
+      "outputFlags": 0,
+      "parameters": [],
+      "presentationStyle": 0,
+      "requiredCapabilities": [],
+      "supportedModes": 1,
+      "systemProtocolMetadata": [],
+      "systemProtocolMetadataV2": [],
+      "systemProtocols": [],
+      "title": {
+        "alternatives": [],
+        "key": "Show Edge options"
+      },
+      "typeSpecificMetadata": [],
+      "visibilityMetadata": {
+        "assistantOnly": false,
+        "isDiscoverable": true
+      }
+    },
     "PowerIntent": {
       "assistantDefinedSchemaTraits": [],
       "assistantDefinedSchemas": [],
@@ -14,10 +51,10 @@
       "identifier": "PowerIntent",
       "isAuthPolExplicit": false,
       "isDiscoverable": true,
-      "mangledTypeName": "__MANGLED_TYPE_NAME__",
+      "mangledTypeName": "__POWER_INTENT_TYPE__",
       "mangledTypeNameByBundleIdentifier": {},
       "mangledTypeNameByBundleIdentifierV2": {},
-      "mangledTypeNameV2": "__MANGLED_TYPE_NAME__",
+      "mangledTypeNameV2": "__POWER_INTENT_TYPE__",
       "openAppWhenRun": false,
       "outputFlags": 0,
       "parameters": [

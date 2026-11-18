@@ -69,6 +69,9 @@ struct ControlStateTests {
     func identifiers() {
         #expect(ControlState.extensionBundleID.hasPrefix("app.edge.cli."))
         #expect(ControlState.powerKind.hasPrefix(ControlState.extensionBundleID))
+        #expect(ControlState.optionsKind.hasPrefix(ControlState.extensionBundleID))
+        #expect(ControlState.powerKind != ControlState.optionsKind)
+        #expect(ControlState.optionsURL.scheme == ControlState.scheme)
     }
 
     @Test("the action metadata template matches the intent it describes")
@@ -81,9 +84,14 @@ struct ControlStateTests {
         let actions = try #require(root["actions"] as? [String: Any])
         let power = try #require(actions["PowerIntent"] as? [String: Any])
         #expect(power["fullyQualifiedTypeName"] as? String == "EdgeControls.PowerIntent")
-        #expect(power["mangledTypeName"] as? String == "__MANGLED_TYPE_NAME__")
+        #expect(power["mangledTypeName"] as? String == "__POWER_INTENT_TYPE__")
         #expect((power["systemProtocols"] as? [String]) == ["com.apple.link.systemProtocol.SetValue"])
         let parameters = try #require(power["parameters"] as? [[String: Any]])
         #expect(parameters.map { $0["name"] as? String } == ["value"])
+
+        let options = try #require(actions["OptionsIntent"] as? [String: Any])
+        #expect(options["fullyQualifiedTypeName"] as? String == "EdgeControls.OptionsIntent")
+        #expect(options["mangledTypeName"] as? String == "__OPTIONS_INTENT_TYPE__")
+        #expect((options["parameters"] as? [Any])?.isEmpty == true)
     }
 }

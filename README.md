@@ -94,19 +94,25 @@ Open at Login item.)
 
 ### Control Center (macOS 26 and later)
 
-Edge adds one switch to Control Center. Open Control Center, click **Edit Controls**, search
-for Edge, and add it. It is highlighted while Edge is on and shows the other Mac's name once
-connected.
+Open Control Center, click **Edit Controls**, search for Edge, and add:
 
-- **On** opens Edge if it is not running and starts it.
-- **Off** quits Edge, the same as Quit in the menu. Nothing keeps running in the background,
-  and start at login is left as it was.
+- **Edge**, the switch. It is highlighted while Edge is on and shows the other Mac's name once
+  connected. **On** opens Edge if it is not running and starts it. **Off** quits Edge, the
+  same as Quit in the menu: nothing keeps running in the background, and start at login is
+  left as it was.
+- **Edge Options** (›), if you want it: opens Edge's whole menu where you clicked — devices,
+  screen arrangement, settings and Quit — without the menu-bar icon.
+
+macOS also offers **Add to Menu Bar** for every control, and apps cannot remove that choice.
+If an Edge control goes in the menu bar, Edge's own icon steps aside so there is only ever one,
+and comes back when the control is removed. (Edge reads the menu bar through Accessibility,
+which it already has.)
 
 Once the switch is in Control Center, **Show in menu bar** in the menu can be unticked so Edge
 lives in Control Center only. Edge never lets itself become unreachable:
 
-- the icon can only be hidden while the switch is in Control Center;
-- if the switch is removed later, the icon comes back by itself within about 15 seconds;
+- the icon can only be hidden while the switch or Edge Options is in Control Center;
+- if they are removed later, the icon comes back by itself within about 15 seconds;
 - opening Edge from Applications or Spotlight always brings the icon back, and with it the
   menu for everything else (pairing, arrangement, clipboard, start at login).
 

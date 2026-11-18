@@ -4,14 +4,17 @@ import EdgeControlState
 import SwiftUI
 import WidgetKit
 
-/// Edge in Control Center: one switch, on and off, like the Dock's auto-hide or Wi-Fi.
+/// Edge in Control Center.
 ///
-/// On opens Edge if it is not running and starts it. Off is Quit: Edge stops and leaves
-/// nothing running behind, so Control Center alone is enough to have it entirely gone.
+/// The switch, on and off like the Dock's auto-hide or Wi-Fi: on opens Edge if it is not
+/// running and starts it; off is Quit, leaving nothing running behind. Edge Options, added
+/// only by those who want it, opens Edge's whole menu — everything else, without the
+/// menu-bar icon.
 @available(macOS 26.0, *)
 struct EdgeControls: WidgetBundle {
     var body: some Widget {
         PowerControl()
+        OptionsControl()
     }
 }
 
@@ -42,6 +45,35 @@ struct PowerControl: ControlWidget {
         }
         .displayName("Edge")
         .description("Turn Edge on, or off to quit it.")
+    }
+}
+
+@available(macOS 26.0, *)
+struct OptionsControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: ControlState.optionsKind) {
+            ControlWidgetButton("Edge Options", action: OptionsIntent()) { _ in
+                Label("Options", systemImage: "chevron.right")
+            }
+        }
+        .displayName("Edge Options")
+        .description("Edge's menu: devices, screen arrangement, settings and Quit.")
+    }
+}
+
+/// Opens Edge's menu where the control was clicked. Described to macOS alongside
+/// `PowerIntent`; the same rules about renaming apply.
+@available(macOS 26.0, *)
+struct OptionsIntent: AppIntent {
+    static let title: LocalizedStringResource = "Show Edge options"
+
+    init() {}
+
+    func perform() async throws -> some IntentResult {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        _ = try? await NSWorkspace.shared.open(ControlState.optionsURL, configuration: configuration)
+        return .result()
     }
 }
 

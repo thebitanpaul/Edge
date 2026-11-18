@@ -35,8 +35,9 @@ extension Commands {
             "Contents/Resources/Metadata.appintents/extract.actionsdata")
         if let data = try? Data(contentsOf: metadata),
            let text = String(data: data, encoding: .utf8),
-           text.contains("EdgeControls.PowerIntent"), !text.contains("__MANGLED_TYPE_NAME__") {
-            ok("the switch's action is described to macOS")
+           text.contains("EdgeControls.PowerIntent"), text.contains("EdgeControls.OptionsIntent"),
+           !text.contains("_INTENT_TYPE__") {
+            ok("the controls' actions are described to macOS")
         } else {
             bad("the switch's action metadata is missing — taps would do nothing; rebuild with Scripts/build.sh")
         }
@@ -96,12 +97,28 @@ extension Commands {
                 if args.has("verbose") {
                     out(Style.dim("    placed: \(kinds.isEmpty ? "nothing" : kinds.sorted().joined(separator: ", "))"))
                 }
-                if kinds.contains(ControlState.powerKind) {
-                    ok("the Edge switch is in Control Center")
-                } else {
-                    info("the Edge switch is not in Control Center — Edit Controls, search for Edge")
-                    out(Style.dim("    The menu-bar icon can only be hidden once it is there."))
+                let power = kinds.contains(ControlState.powerKind)
+                let options = kinds.contains(ControlState.optionsKind)
+                (power ? ok : info)("the Edge switch \(power ? "is" : "is not") in Control Center")
+                (options ? ok : info)("Edge Options \(options ? "is" : "is not") in Control Center (optional)")
+                if !power && !options {
+                    out(Style.dim("    Edit Controls, search for Edge. The menu-bar icon can only be hidden once one is there."))
                 }
+            }
+        }
+
+        // Where macOS put them is not something it tells the app; the menu bar can be read.
+        let extras = MenuBarExtras.systemItems()
+        if extras.isEmpty {
+            info("could not read the menu bar (Accessibility) — a duplicate icon cannot be avoided")
+        } else if extras.contains(where: \.isEdgeControl) {
+            ok("an Edge control is in the menu bar — Edge's own icon stands aside for it")
+        } else {
+            info("no Edge control in the menu bar")
+        }
+        if args.has("verbose") {
+            for item in extras {
+                out(Style.dim("    menu bar: \(item.identifier.isEmpty ? "—" : item.identifier)  \(item.description)\(item.title.isEmpty ? "" : "  [\(item.title)]")"))
             }
         }
 

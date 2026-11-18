@@ -74,9 +74,12 @@ public struct ControlState: Codable, Equatable, Sendable {
     public static let scheme = "edge-control"
     public static let startURL = URL(string: "edge-control://start")!
     public static let stopURL = URL(string: "edge-control://stop")!
+    /// Opens Edge's whole menu where the pointer is — the Edge Options control.
+    public static let optionsURL = URL(string: "edge-control://options")!
 
     public static let extensionBundleID = "app.edge.cli.controls"
     public static let powerKind = "app.edge.cli.controls.power"
+    public static let optionsKind = "app.edge.cli.controls.options"
 
     // MARK: - The file
 

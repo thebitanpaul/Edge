@@ -154,12 +154,19 @@ cp "$CONTROLS_BIN" "$APPEX/Contents/MacOS/EdgeControls"
 # include, so it is written here from Resources/ControlsMetadata.json — modelled on the Dock's
 # own auto-hide control — with the intent's mangled type name read out of the binary just
 # built, so a rename cannot leave it pointing at a type that no longer exists.
-INTENT_TYPE="$(nm "$CONTROLS_BIN" | sed -n 's/.* _\$s\(12EdgeControls[0-9]*PowerIntentV\)Mn$/\1/p')"
-if [ -z "$INTENT_TYPE" ]; then
-  echo "could not find EdgeControls.PowerIntent in $CONTROLS_BIN — was it renamed?" >&2
-  exit 1
-fi
-sed "s/__MANGLED_TYPE_NAME__/$INTENT_TYPE/g" "$ROOT/Resources/ControlsMetadata.json" \
+intent_type() {
+  local found
+  found="$(nm "$CONTROLS_BIN" | sed -n "s/.* _\\\$s\\(12EdgeControls[0-9]*$1V\\)Mn\$/\\1/p")"
+  if [ -z "$found" ]; then
+    echo "could not find EdgeControls.$1 in $CONTROLS_BIN — was it renamed?" >&2
+    exit 1
+  fi
+  echo "$found"
+}
+POWER_INTENT="$(intent_type PowerIntent)"
+OPTIONS_INTENT="$(intent_type OptionsIntent)"
+sed -e "s/__POWER_INTENT_TYPE__/$POWER_INTENT/g" -e "s/__OPTIONS_INTENT_TYPE__/$OPTIONS_INTENT/g" \
+  "$ROOT/Resources/ControlsMetadata.json" \
   > "$APPEX/Contents/Resources/Metadata.appintents/extract.actionsdata"
 cat > "$APPEX/Contents/Resources/Metadata.appintents/version.json" <<JSON
 {

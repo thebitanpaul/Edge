@@ -55,6 +55,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// briefly reports nothing placed while Control Center reloads, and taking that at face
     /// value put the icon back every time Edge was turned on from the switch.
     private var missedPlacementChecks = 0
+    /// The icon is hidden because that was chosen and the switch is there to stand in for it.
+    private var hiddenByChoice = false
+    /// One of Edge's controls is sitting in the menu bar itself. Edge's own icon steps aside
+    /// for it, so there is never a second Edge icon up there.
+    private var controlInMenuBar = false
+    private var menuBarScanTimer: Timer?
+    private let menuBarScanQueue = DispatchQueue(label: "app.edge.menubar-scan", qos: .utility)
 
     private var logURL: URL { Paths.supportDirectory.appendingPathComponent("session.log") }
 
@@ -100,8 +107,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         LoginItem.migrateFromLaunchAgent()
         // Hidden from the first frame when that is the choice, then confirmed. Shown and then
         // hidden a moment later read as a second icon appearing and vanishing.
-        if prefersHiddenIcon && controlsAvailable { statusItem.isVisible = false }
+        if prefersHiddenIcon && controlsAvailable { hiddenByChoice = true; applyIconVisibility() }
         applyMenuBarVisibility()
+        startScanningMenuBar()
         permissionsWereGranted = missingPermissions.isEmpty
         // Anyone who already has a pairing has been through this; the flag is new, they are not.
         if !setupCompleted, !(((try? SecretStore.load()) ?? SecretStore()).pairings.isEmpty) {
@@ -476,8 +484,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         if controlsAvailable {
             let icon = action("Show in menu bar", #selector(toggleMenuBarIcon))
-            icon.state = statusItem.isVisible ? .on : .off
+            icon.state = prefersHiddenIcon ? .off : .on
             menu.addItem(icon)
+            if controlInMenuBar {
+                menu.addItem(disabled("The Edge control in the menu bar stands in for it"))
+            }
         }
 
         menu.addItem(.separator())
@@ -1200,6 +1211,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.publishControlState()
             case "stop":
                 self.quit()
+            case "options":
+                self.showMenuAtPointer()
             default:
                 Log.debug("ignored an unknown control link: \(url.absoluteString)")
             }
@@ -1218,7 +1231,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func launchedByHand() {
         guard prefersHiddenIcon else { return }
         prefersHiddenIcon = false
-        statusItem.isVisible = true
+        hiddenByChoice = false
+        applyIconVisibility()
         stopReachabilityChecks()
     }
 
@@ -1227,12 +1241,54 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// The way back that cannot be lost, as in most menu-bar apps that let the icon be hidden:
     /// it always brings the icon back, and opens its menu so it is obvious where it went.
     func reopened() {
-        if !statusItem.isVisible {
+        if hiddenByChoice {
             prefersHiddenIcon = false
-            statusItem.isVisible = true
+            hiddenByChoice = false
+            applyIconVisibility()
             stopReachabilityChecks()
         }
-        DispatchQueue.main.async { [weak self] in self?.statusItem.button?.performClick(nil) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // Standing aside for a control in the menu bar, there is no icon to open the menu
+            // from; open it where the pointer is instead.
+            if self.statusItem.isVisible {
+                self.statusItem.button?.performClick(nil)
+            } else {
+                self.showMenuAtPointer()
+            }
+        }
+    }
+
+    /// The single place that decides whether Edge's own icon shows.
+    private func applyIconVisibility() {
+        let visible = !hiddenByChoice && !controlInMenuBar
+        if statusItem.isVisible != visible { statusItem.isVisible = visible }
+    }
+
+    // MARK: Standing aside for a control in the menu bar
+
+    /// Looks every few seconds. Adding a control to the menu bar is not announced to the app
+    /// that owns it, and nobody should have to restart Edge to lose a duplicate icon.
+    private func startScanningMenuBar() {
+        guard controlsAvailable, menuBarScanTimer == nil else { return }
+        scanMenuBar()
+        menuBarScanTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
+            self?.scanMenuBar()
+        }
+        menuBarScanTimer?.tolerance = 2
+    }
+
+    private func scanMenuBar() {
+        menuBarScanQueue.async { [weak self] in
+            let found = MenuBarExtras.edgeControlInMenuBar()
+            DispatchQueue.main.async {
+                guard let self, found != self.controlInMenuBar else { return }
+                self.controlInMenuBar = found
+                Log.info(found ? "an Edge control is in the menu bar — hiding Edge's own icon"
+                               : "no Edge control in the menu bar — Edge's own icon is back")
+                self.applyIconVisibility()
+            }
+        }
     }
 
     // MARK: Hiding the menu-bar icon
@@ -1260,9 +1316,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// The switch is what makes hiding safe: turning it off quits Edge.
+    /// Either control makes hiding safe: turning the switch off quits Edge, and Edge Options
+    /// opens this menu, Quit included.
     private static func canQuitFromControlCenter(_ kinds: Set<String>?) -> Bool {
-        kinds?.contains(ControlState.powerKind) == true
+        guard let kinds else { return false }
+        return kinds.contains(ControlState.powerKind) || kinds.contains(ControlState.optionsKind)
     }
 
     /// Shows the icon unless it was hidden *and* the switch is still in Control Center.
@@ -1271,7 +1329,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// pixels, an icon hidden that should not be costs the only way to quit.
     private func applyMenuBarVisibility() {
         guard prefersHiddenIcon else {
-            statusItem.isVisible = true
+            hiddenByChoice = false
+            applyIconVisibility()
             stopReachabilityChecks()
             return
         }
@@ -1279,7 +1338,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             guard let self, self.prefersHiddenIcon else { return }
             if Self.canQuitFromControlCenter(kinds) {
                 self.missedPlacementChecks = 0
-                self.statusItem.isVisible = false
+                self.hiddenByChoice = true
+                self.applyIconVisibility()
                 self.startReachabilityChecks()
             } else if self.missedPlacementChecks == 0 {
                 // Ask again shortly before believing it.
@@ -1293,7 +1353,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 // Re-adding the control later should not make the icon vanish by surprise.
                 self.missedPlacementChecks = 0
                 self.prefersHiddenIcon = false
-                self.statusItem.isVisible = true
+                self.hiddenByChoice = false
+                self.applyIconVisibility()
                 self.stopReachabilityChecks()
                 Log.info("Edge is no longer in Control Center — showing the menu-bar icon again")
             }
@@ -1316,9 +1377,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleMenuBarIcon() {
-        guard statusItem.isVisible else {
+        guard !prefersHiddenIcon else {
             prefersHiddenIcon = false
-            statusItem.isVisible = true
+            hiddenByChoice = false
+            applyIconVisibility()
             stopReachabilityChecks()
             return
         }
@@ -1326,16 +1388,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             guard let self else { return }
             guard Self.canQuitFromControlCenter(kinds) else {
                 self.notify("Add Edge to Control Center first",
-                            "Open Control Center, click Edit Controls, search for Edge and add it. "
-                            + "Then the menu bar icon can be hidden.")
+                            "Open Control Center, click Edit Controls, search for Edge and add the "
+                            + "Edge switch or Edge Options. Then the menu bar icon can be hidden.")
                 return
             }
             self.prefersHiddenIcon = true
-            self.statusItem.isVisible = false
+            self.hiddenByChoice = true
+            self.applyIconVisibility()
             self.startReachabilityChecks()
             self.notify("Menu bar icon hidden",
-                        "Use the Edge switch in Control Center: on starts Edge, off quits it. "
-                        + "To get this menu back, open Edge from Applications.")
+                        "Use Edge in Control Center: the switch turns it on or quits it, and "
+                        + "Edge Options opens this menu. Opening Edge from Applications brings "
+                        + "the icon back.")
         }
     }
 
