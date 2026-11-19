@@ -36,7 +36,9 @@ public final class LinkListener {
     private let keys: [PSKEntry]
     private let resolvePSK: @Sendable (Data) -> Data?
     private let authorizePeer: @Sendable (DeviceID, Data) -> Bool
-    private let queue = DispatchQueue(label: "app.edge.listener")
+    /// Shared with every link it accepts, so it is where the receiving Mac decodes and injects
+    /// each pointer movement: it runs at the pointer's priority, not the default one.
+    private let queue = DispatchQueue(label: "app.edge.listener", qos: .userInteractive)
 
     private var listener: NWListener?
     private var links: [ObjectIdentifier: SecureLink] = [:]

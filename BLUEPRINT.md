@@ -600,6 +600,52 @@ so its editability follows the new role, and says plainly that the other Mac nee
 * Help carries the version and the log. The commit belongs in `--version`, where someone is
   asking; "why is it not connecting" is still a terminal command.
 
+#### A pointer that stutters over Wi-Fi, and one left standing on the secondary
+
+Reported: on the secondary the pointer felt laggy and jittery, and crossing in either direction
+sometimes left a stale pointer at the edge of the screen just left. The primary's own log had
+the clearest evidence: over Wi-Fi the heartbeat's round trip ran from **6 ms to 286 ms, mean
+55 ms**, clustering at either ~7 ms or 50–150 ms. Several causes, each fixed separately; none of
+it verified on the two Macs yet at the time of writing.
+
+* **Radios dozing.** A laptop's Wi-Fi radio sleeps as soon as traffic stops, and a packet for
+  a sleeping radio waits at the router for the next beacon, about 100 ms. Pointer traffic stops
+  whenever the hand does, so movement after every pause started late — a pointer that
+  hesitates, then jumps. `LinkWarmer` now sends a tiny ping whenever nothing else has gone
+  across for 25 ms while the pointer is away (for up to 30 s without input), and one as the
+  pointer approaches the edge, so the far radio is awake before the crossing. Pings are
+  answered, so both radios stay up; every build already answers them, so it needs nothing from
+  the other Mac. Sequence number 0 is reserved for them and the heartbeat skips it.
+* **Best-effort priority.** `.responsiveData` sounds right and shares Wi-Fi's best-effort queue
+  with every download on the network. The link now uses `.interactiveVideo`, which gets WMM's
+  video queue. Only a marking: a network that ignores it treats the traffic as before.
+* **Default-priority queues.** Every input event passes through the link's queue on both Macs —
+  on the secondary, the listener's queue, where each move is decoded and injected. Both are
+  `.userInteractive` now.
+* **Not rounding, as it turned out.** The first suspect was the integer delta field, on the
+  theory that a slowly moved trackpad reports fractions of a point and truncation dropped
+  them. Measured instead of assumed: 678 real movements on the MacBook Air, trackpad and mouse,
+  slow movement included, had not one fractional delta — the double field agreed exactly. So
+  nothing changed there. Coalesced moves do now add their deltas into the move that replaces
+  them, which apps that read deltas rather than positions were losing.
+* **The secondary hid its cursor once and never looked again.** The primary has re-hidden within
+  a frame since the menu-bar redraw problem above; the secondary did not, so anything there that
+  showed the cursor again — an application changing its cursor, a window coming forward — left
+  it standing at the edge for the whole trip. It now watches at 50 Hz like the primary.
+* **Hide/show counted by rounds, not by calls.** `CGDisplayHideCursor`'s display argument is
+  ignored ("The `display' parameter is ignored", says the header), so hiding "on every display"
+  raises one cursor-wide count once per display.
+  Showing on every display at the end balanced only if the number of displays had not changed
+  in between; a surplus show then cancelled the next crossing's hide. Each successful call is
+  recorded and undone exactly, and re-hiding is capped at 200 rounds a trip.
+
+To tell the network from Edge during real use — the heartbeat only samples an idle link every
+two seconds — a peer that advertises `.timedPointer` gets `timedMouseMove`: the same move,
+stamped with the sender's clock (29 bytes; an older peer gets `mouseMove`, so the protocol
+version is unchanged). The secondary measures how late each update lands behind the quickest
+one (`ArrivalJitter`; the clocks' offset cancels), logs it at debug level after every trip, and
+when 95% are not within 30 ms says so in its log once every ten minutes, pointing at a cable.
+
 ### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 

@@ -170,6 +170,7 @@ struct CodecTests {
         .enterScreen(x: .min, y: .max, flags: 0xDEAD_BEEF_CAFE_0000),
         .leaveScreen,
         .mouseMove(x: -1, y: -1, dx: .min, dy: .max),
+        .timedMouseMove(x: .min, y: .max, dx: -3, dy: 7, sentAt: .max),
         .mouseButton(button: .middle, down: false, clickCount: 3, x: 5, y: -5),
         .scroll(dx: -10, dy: 10, isPixel: false),
         .keyEvent(keyCode: 0xFFFF, down: true, isRepeat: true, flags: .max),
@@ -250,6 +251,7 @@ struct CodecTests {
     @Test("hot-path frames stay small")
     func hotPath() {
         #expect(Codec.encodeFrame(.mouseMove(x: 0, y: 0, dx: 0, dy: 0)).count <= 24)
+        #expect(Codec.encodeFrame(.timedMouseMove(x: 0, y: 0, dx: 0, dy: 0, sentAt: 0)).count <= 32)
         #expect(Codec.encodeFrame(.keyEvent(keyCode: 0, down: true, isRepeat: false, flags: 0)).count <= 20)
     }
 }
@@ -636,5 +638,120 @@ struct FileTransferTests {
         #expect(throws: (any Error).self) {
             try Codec.decode(type: MessageType.fileOffer.rawValue, payload: w.data)
         }
+    }
+}
+
+@Suite("Timed pointer moves")
+struct TimedPointerTests {
+    /// The stamp is the whole point of the message; it must survive exactly, at any value.
+    @Test("the sender's clock survives the wire")
+    func stampSurvives() throws {
+        for stamp: UInt64 in [0, 1, 987_654_321, .max] {
+            let frame = Codec.encodeFrame(.timedMouseMove(x: -1920, y: 1080, dx: -3, dy: 7,
+                                                          sentAt: stamp))
+            guard case let .timedMouseMove(x, y, dx, dy, sentAt) =
+                    try Codec.decode(type: frame[4], payload: frame.dropFirst(5)) else {
+                Issue.record("decoded the wrong case"); return
+            }
+            #expect(x == -1920 && y == 1080 && dx == -3 && dy == 7)
+            #expect(sentAt == stamp)
+        }
+    }
+
+    /// An older Mac must keep getting plain moves; the capability is how a newer one knows
+    /// it may send anything else.
+    @Test("the capability is offered by default")
+    func capabilityOffered() {
+        #expect(Capabilities.baseline.contains(.timedPointer))
+        #expect(Config().capabilities.contains(.timedPointer))
+        #expect(!Capabilities([.pointer, .keyboard]).contains(.timedPointer))
+    }
+}
+
+@Suite("Arrival jitter")
+struct ArrivalJitterTests {
+    private let ms: UInt64 = 1_000_000
+
+    /// Clocks on two Macs are unrelated: a constant offset between them is not lateness.
+    @Test("a steady link shows no lateness, whatever the clock offset")
+    func steadyLink() {
+        var j = ArrivalJitter()
+        let offset: UInt64 = 5_000_000_000_000
+        for i in 0..<200 {
+            let sent = UInt64(i) * 8 * ms
+            j.record(sentAt: sent, arrivedAt: sent + offset)
+        }
+        let s = j.summary
+        #expect(s.samples == 200)
+        #expect(s.worst == 0 && s.p95 == 0)
+        #expect(!s.isNoticeable)
+    }
+
+    /// The sender's clock may be far ahead of the receiver's, so "arrived minus sent" is
+    /// negative. Lateness is still measured from the quickest delivery.
+    @Test("a sender clock ahead of the receiver's still measures")
+    func senderAhead() {
+        var j = ArrivalJitter()
+        let ahead: UInt64 = 9_000_000_000_000
+        j.record(sentAt: ahead, arrivedAt: 10 * ms)
+        j.record(sentAt: ahead + 8 * ms, arrivedAt: 18 * ms)
+        j.record(sentAt: ahead + 16 * ms, arrivedAt: 66 * ms)   // 40 ms late
+        #expect(j.summary.worst == 40)
+    }
+
+    /// A link that is usually quick but stalls now and then — the Wi-Fi pattern — is what
+    /// has to show up, and loudly enough to be reported.
+    @Test("a link that stalls shows up as noticeable")
+    func stallsAreNoticed() {
+        var j = ArrivalJitter()
+        for i in 0..<100 {
+            let sent = UInt64(i) * 8 * ms
+            // Every tenth update waits on a dozing radio.
+            let delay = i % 10 == 0 ? 90 * ms : 2 * ms
+            j.record(sentAt: sent, arrivedAt: sent + delay)
+        }
+        let s = j.summary
+        #expect(s.median == 0)
+        #expect(s.worst == 88)
+        #expect(s.p95 == 88)
+        #expect(s.isNoticeable)
+    }
+
+    /// The quickest delivery may come after slower ones; earlier samples must be judged
+    /// against it, not against whatever was quickest when they arrived.
+    @Test("the baseline is the quickest of the whole window")
+    func baselineIsWholeWindow() {
+        var j = ArrivalJitter()
+        j.record(sentAt: 0, arrivedAt: 30 * ms)
+        j.record(sentAt: 10 * ms, arrivedAt: 40 * ms)
+        j.record(sentAt: 20 * ms, arrivedAt: 25 * ms)   // the quickest, last
+        #expect(j.summary.worst == 25)
+        #expect(j.percentile(0) == 0)
+    }
+
+    @Test("old samples make way, and reset forgets")
+    func capacityAndReset() {
+        var j = ArrivalJitter()
+        // An early stall, then a long steady stretch that pushes it out of the window.
+        j.record(sentAt: 0, arrivedAt: 500 * ms)
+        for i in 1...ArrivalJitter.capacity {
+            let sent = UInt64(i) * ms
+            j.record(sentAt: sent, arrivedAt: sent)
+        }
+        #expect(j.count == ArrivalJitter.capacity)
+        #expect(j.summary.worst == 0)
+
+        j.reset()
+        #expect(j.count == 0)
+        #expect(j.summary.samples == 0)
+    }
+
+    /// Too few samples say nothing about a link; a short hop across should not raise alarms.
+    @Test("a handful of samples is never noticeable")
+    func fewSamples() {
+        var j = ArrivalJitter()
+        j.record(sentAt: 0, arrivedAt: 0)
+        j.record(sentAt: 0, arrivedAt: 200 * ms)
+        #expect(!j.summary.isNoticeable)
     }
 }

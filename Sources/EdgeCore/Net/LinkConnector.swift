@@ -10,7 +10,10 @@ public enum LinkConnector {
                                capabilities: Capabilities = .baseline,
                                link: LinkPreference = .auto,
                                handshakeTimeout: TimeInterval = 10,
-                               queue: DispatchQueue = DispatchQueue(label: "app.edge.connector")) -> SecureLink {
+                               // Every input event passes through this queue on its way out,
+                               // so it runs at the priority of the pointer it carries.
+                               queue: DispatchQueue = DispatchQueue(label: "app.edge.connector",
+                                                                    qos: .userInteractive)) -> SecureLink {
         let params = TLSConfig.parameters(keys: [PSKEntry(psk: psk)], link: link)
         params.includePeerToPeer = true
         let connection = NWConnection(to: endpoint, using: params)

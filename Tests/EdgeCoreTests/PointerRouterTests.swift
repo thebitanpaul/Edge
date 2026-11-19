@@ -367,4 +367,34 @@ struct PointerRouterTests {
         #expect(returned, "\(edge): never came back")
         #expect(!r.isRemote)
     }
+
+    // MARK: approaching the edge
+
+    /// Only a hint for waking the other Mac's radio — but a wrong one either wakes it for
+    /// nothing all day or not at all, so the cases are pinned down.
+    @Test("heading for the shared edge, near it, counts as approaching")
+    func approaching() {
+        let r = router()
+        let nearEdge = ScreenPoint(x: 3300, y: 556)       // 90 pt from the right edge
+        let farFromEdge = ScreenPoint(x: 2000, y: 556)
+        #expect(r.isApproachingEdge(localLocation: nearEdge, delta: push))
+        #expect(!r.isApproachingEdge(localLocation: nearEdge, delta: pull), "heading away")
+        #expect(!r.isApproachingEdge(localLocation: farFromEdge, delta: push), "too far")
+        #expect(!r.isApproachingEdge(localLocation: nearEdge, delta: ScreenPoint(x: 0, y: 8)),
+                "moving along it")
+    }
+
+    @Test("nothing is approaching without a layout, mid-drag, or once over there")
+    func notApproaching() {
+        let nearEdge = ScreenPoint(x: 3300, y: 556)
+        #expect(!PointerRouter().isApproachingEdge(localLocation: nearEdge, delta: push))
+
+        var dragging = router()
+        dragging.allowCrossing = false
+        #expect(!dragging.isApproachingEdge(localLocation: nearEdge, delta: push))
+
+        var remote = router()
+        #expect(crossOver(&remote) != nil)
+        #expect(!remote.isApproachingEdge(localLocation: nearEdge, delta: push))
+    }
 }

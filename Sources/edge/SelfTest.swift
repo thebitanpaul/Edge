@@ -48,6 +48,7 @@ extension Commands {
                    nonce: Crypto.randomBytes(32), keyID: Crypto.randomBytes(8)),
             .ping(seq: 42, sentAt: 1_234_567_890),
             .mouseMove(x: -1920, y: 1080, dx: -3, dy: 7),
+            .timedMouseMove(x: -1920, y: 1080, dx: -3, dy: 7, sentAt: 1_234_567_890),
             .mouseButton(button: .right, down: true, clickCount: 2, x: 10, y: 20),
             .scroll(dx: 0, dy: -12, isPixel: true),
             .keyEvent(keyCode: 0x24, down: true, isRepeat: false, flags: 0x0010_0000),

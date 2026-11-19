@@ -84,6 +84,11 @@ final class SharingSession {
     var peerAcceptsFiles = false
     /// Whether the other Mac's build understands media keys. Until it says so they stay here.
     var peerAcceptsMediaKeys = false
+    /// Whether the other Mac takes timestamped pointer moves, so it can measure how evenly
+    /// they arrive. An older build gets plain ones, as before.
+    var peerAcceptsTimedPointer = false
+    /// Keeps both Wi-Fi radios awake while the pointer is over there; see `LinkWarmer`.
+    private let warmer = LinkWarmer()
 
     init(config: Config, remoteName: String) {
         self.config = config
@@ -171,6 +176,7 @@ final class SharingSession {
 
     func detach(reason: String) {
         returnToLocal(reason: reason)
+        warmer.stop()
         lock.lock(); link = nil; lock.unlock()
         tap?.setEnabled(false)
         activity.update(linked: false)
@@ -277,6 +283,7 @@ final class SharingSession {
 
         if isMovement {
             let location = ScreenPoint(x: Double(event.location.x), y: Double(event.location.y))
+            let delta = event.pointerDelta
             // A drag leaning on the shared edge: if it is carrying files, let it through.
             // Window drags and text selections still stop at the edge, which is what you
             // want — only files have anywhere to go on the other Mac.
@@ -285,29 +292,41 @@ final class SharingSession {
                 considerFileDrag(at: location)
             }
             lock.lock()
-            let decision = router.pointerMoved(localLocation: location, delta: event.pointerDelta)
+            let decision = router.pointerMoved(localLocation: location, delta: delta)
+            let approaching = decision == .passThrough
+                && router.isApproachingEdge(localLocation: location, delta: delta)
             lock.unlock()
 
             switch decision {
             case .passThrough:
+                // Heading for the edge: wake the other Mac's radio now, so the crossing does
+                // not wait for it.
+                if approaching { warmer.nudge(currentLink) }
                 return event
             case let .cross(entry):
                 beginRemote(entry: entry, departure: location, link: currentLink,
                             flags: event.flags.rawValue)
                 return nil
             case let .forward(remotePoint):
-                let delta = event.pointerDelta
-                currentLink.send(.mouseMove(x: Int32(remotePoint.x), y: Int32(remotePoint.y),
-                                            dx: Int32(delta.x), dy: Int32(delta.y)))
+                let (x, y) = (Int32(remotePoint.x), Int32(remotePoint.y))
+                let (dx, dy) = (Int32(delta.x), Int32(delta.y))
+                if peerAcceptsTimedPointer {
+                    currentLink.send(.timedMouseMove(x: x, y: y, dx: dx, dy: dy,
+                                                     sentAt: DispatchTime.now().uptimeNanoseconds))
+                } else {
+                    currentLink.send(.mouseMove(x: x, y: y, dx: dx, dy: dy))
+                }
 
-                // Nothing else happens here, deliberately.
+                // Nothing else happens here, deliberately — beyond bookkeeping that never
+                // leaves this process.
                 //
                 // This callback sits inside the window server's own event pipeline, and a
                 // synchronous call back into it — warping the cursor, say — is enough to make
                 // events slip through unswallowed. `cursor-doctor` measured a callback that
                 // only counts and deletes: 447 movements, cursor held at a single position.
-                // Deleting the event is what holds the cursor still. Anything added here can
-                // only take that away.
+                // Deleting the event is what holds the cursor still. Anything that talks to
+                // the window server here can only take that away.
+                warmer.noteInput()
                 lock.lock(); forwarded += 1; lock.unlock()
                 return nil
             case let .comeBack(local):
@@ -411,6 +430,7 @@ final class SharingSession {
         lock.lock(); lastHeardFrom = Date(); lock.unlock()
 
         link.send(.enterScreen(x: Int32(entry.x), y: Int32(entry.y), flags: flags))
+        warmer.start(link: link)
 
         // Before the cursor is hidden and the hardware detached: both of those make the
         // events that end the drag here impossible to deliver.
@@ -507,6 +527,7 @@ final class SharingSession {
     /// The one place that restores local control. Every route back goes through it, so none
     /// of them can forget to re-attach the hardware or un-hide the cursor.
     private func finishReturn(to destination: ScreenPoint?, link: SecureLink?, reason: String) {
+        warmer.stop()
         // First thing, before anything can warp the cursor back to the parking spot again.
         stopHolding()
         stopWatchingDrift()
@@ -554,6 +575,7 @@ final class SharingSession {
     // MARK: - Forwarding
 
     private func forward(type: CGEventType, event: CGEvent, link: SecureLink) {
+        warmer.noteInput()
         switch type {
         case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
              .otherMouseDown, .otherMouseUp:

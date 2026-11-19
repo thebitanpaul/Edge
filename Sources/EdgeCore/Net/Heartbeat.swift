@@ -63,6 +63,8 @@ public final class Heartbeat {
             onTimeout?(s)
         }
         seq &+= 1
+        // Zero belongs to `LinkWarmer`, whose pings are not measurements.
+        if seq == LinkWarmer.pingSeq { seq &+= 1 }
         inflight[seq] = now
         link.send(.ping(seq: seq, sentAt: now))
     }

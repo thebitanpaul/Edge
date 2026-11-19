@@ -392,6 +392,7 @@ extension Commands {
             directory.note(peer: peer)
             sharing?.peerAcceptsFiles = peer.capabilities.contains(.files)
             sharing?.peerAcceptsMediaKeys = peer.capabilities.contains(.mediaKeys)
+            sharing?.peerAcceptsTimedPointer = peer.capabilities.contains(.timedPointer)
             ok("link up  →  \(Style.bold(peer.name))  [\(peer.deviceID.short)]  \(peer.endpoint)")
             info("\(peer.tlsDescription)  ·  key \(String(Crypto.hex(peer.keyID).prefix(8)))")
             out()
@@ -664,7 +665,12 @@ final class ReceivingSession {
     var onPeerDisplays: (([Display], Data) -> Void)?
     private var cursorHidden: LocalPointer.CaptureState?
     private var cursorTimer: DispatchSourceTimer?
+    /// Times something showed the cursor again while the pointer was away, this trip.
+    private var rehides = 0
     private var lastInjectedAt = ScreenPoint(x: 0, y: 0)
+    /// How unevenly the pointer's updates arrive, this trip; see `ArrivalJitter`.
+    private var jitter = ArrivalJitter()
+    private var lastJitterNotice = Date.distantPast
     private let cursorQueue = DispatchQueue(label: "app.edge.client-cursor")
     private let injector: EventInjector
     private let watcher = DisplayWatcher()
@@ -757,10 +763,21 @@ final class ReceivingSession {
         case .fileRequest:
             sendDraggedFiles()
 
-        case let .mouseMove(x, y, dx, dy):
+        case let .timedMouseMove(x, y, dx, dy, sentAt):
+            let arrivedAt = DispatchTime.now().uptimeNanoseconds
             let point = ScreenPoint(x: Double(x), y: Double(y))
             injector.move(to: point, delta: ScreenPoint(x: Double(dx), y: Double(dy)))
+            lock.lock()
             lastInjectedAt = point
+            jitter.record(sentAt: sentAt, arrivedAt: arrivedAt)
+            lock.unlock()
+            countEvent()
+
+        case let .mouseMove(x, y, dx, dy):
+            // From a build that does not stamp its moves.
+            let point = ScreenPoint(x: Double(x), y: Double(y))
+            injector.move(to: point, delta: ScreenPoint(x: Double(dx), y: Double(dy)))
+            lock.lock(); lastInjectedAt = point; lock.unlock()
             countEvent()
 
         case let .mouseButton(button, down, clickCount, x, y):
@@ -798,13 +815,17 @@ final class ReceivingSession {
             showLocalCursor()
             injector.setFlags(flags)
             injector.warp(to: ScreenPoint(x: Double(x), y: Double(y)))
+            lock.lock()
             lastInjectedAt = ScreenPoint(x: Double(x), y: Double(y))
+            jitter.reset()
+            lock.unlock()
             Log.debug("pointer entered at (\(x), \(y))")
 
         case .leaveScreen:
             injector.releaseEverything()
             hideLocalCursor()
             Log.debug("pointer left")
+            reportJitter()
 
         case let .screenInfo(displays):
             // Record them, not merely note them. Only the dialling side was storing this, so
@@ -855,37 +876,51 @@ final class ReceivingSession {
     /// own trackpad, and taking it away would be worse than a stray cursor. Instead the
     /// cursor is watched, and if it moves while nothing is being injected then somebody is
     /// using this Mac directly and it comes straight back.
+    ///
+    /// Watched for the opposite too. Hiding once was not enough: an application here
+    /// changing its cursor, or being brought to the front, can show it again, and with
+    /// nothing checking, that left a pointer standing at the edge of this screen for as long
+    /// as the pointer stayed on the other Mac. The sending Mac has always re-hidden; this
+    /// one now does the same, within a frame.
     private func hideLocalCursor() {
         lock.lock()
         guard cursorHidden == nil else { lock.unlock(); return }
         let state = LocalPointer.hideOnly()
         cursorHidden = state
+        rehides = 0
         lastInjectedAt = LocalPointer.liveLocation
-        lock.unlock()
-
-        if !state.hidden {
-            Log.debug("could not hide this Mac's cursor (\(state.summary))")
-        }
-
         let timer = DispatchSource.makeTimerSource(queue: cursorQueue)
-        timer.schedule(deadline: .now() + 0.1, repeating: 0.1, leeway: .milliseconds(30))
-        timer.setEventHandler { [weak self] in self?.checkForLocalUse() }
+        timer.schedule(deadline: .now() + .milliseconds(20), repeating: .milliseconds(20),
+                       leeway: .milliseconds(5))
+        timer.setEventHandler { [weak self] in self?.watchHiddenCursor() }
+        cursorTimer?.cancel()
         cursorTimer = timer
+        lock.unlock()
         timer.resume()
+
+        if !state.hidden || state.confirmedHidden == false {
+            Log.debug("could not hide this Mac's cursor first time (\(state.summary)); will keep trying")
+        }
     }
 
     private func showLocalCursor() {
+        lock.lock()
         cursorTimer?.cancel()
         cursorTimer = nil
-        lock.lock()
         let state = cursorHidden
         cursorHidden = nil
+        let rehidden = rehides
         lock.unlock()
         if let state { LocalPointer.endCapture(state, restoringTo: nil) }
+        if rehidden > 0 {
+            Log.debug("this Mac's cursor was shown by something else \(rehidden) time(s) "
+                      + "while the pointer was away, and hidden again each time")
+        }
     }
 
-    /// Is somebody using this Mac's own mouse? Then stop hiding its cursor.
-    private func checkForLocalUse() {
+    /// While the pointer is away: somebody using this Mac's own mouse gets the cursor back;
+    /// anything else that shows it gets it hidden again.
+    private func watchHiddenCursor() {
         lock.lock()
         let hidden = cursorHidden != nil
         let expected = lastInjectedAt
@@ -895,9 +930,39 @@ final class ReceivingSession {
         let actual = LocalPointer.liveLocation
         let moved = abs(actual.x - expected.x) + abs(actual.y - expected.y)
         // Nothing is being injected while the pointer is away, so any movement is local.
-        guard moved > 3 else { return }
-        Log.debug("this Mac's own pointer moved — showing its cursor again")
-        showLocalCursor()
+        if moved > 3 {
+            Log.debug("this Mac's own pointer moved — showing its cursor again")
+            showLocalCursor()
+            return
+        }
+
+        guard LocalPointer.isCursorVisible == true else { return }
+        lock.lock()
+        if var state = cursorHidden {
+            LocalPointer.reassertHidden(&state)
+            cursorHidden = state
+            rehides += 1
+        }
+        lock.unlock()
+    }
+
+    /// Says, once in a while, when the pointer has been arriving unevenly enough to see.
+    ///
+    /// The one thing a stuttering pointer cannot tell you is whether it is the network or
+    /// Edge. This can: lateness measured against the link's own quickest delivery is the
+    /// network, whatever Edge does at either end.
+    private func reportJitter() {
+        lock.lock()
+        let summary = jitter.summary
+        jitter.reset()
+        lock.unlock()
+        guard summary.samples >= 30 else { return }
+        Log.debug("pointer stream: \(summary.description)")
+        guard summary.isNoticeable, Date().timeIntervalSince(lastJitterNotice) > 600 else { return }
+        lastJitterNotice = Date()
+        info("the pointer reached this Mac unevenly — \(summary.description). That delay is "
+             + "the network between the two Macs, usually Wi-Fi. A Thunderbolt or USB-C cable "
+             + "between them removes it: Connect over ▸ Cable in the Edge menu.")
     }
 
     /// Pointer moves arrive in the hundreds per second; log a rate, not a line per event.

@@ -87,7 +87,7 @@ public final class SecureLink {
                 resolvePSK: @escaping @Sendable (Data) -> Data? = { _ in nil },
                 authorizePeer: @escaping @Sendable (DeviceID, Data) -> Bool = { _, _ in true },
                 handshakeTimeout: TimeInterval = 10,
-                queue: DispatchQueue = DispatchQueue(label: "app.edge.link")) {
+                queue: DispatchQueue = DispatchQueue(label: "app.edge.link", qos: .userInteractive)) {
         self.connection = connection
         self.role = role
         self.identity = identity
@@ -231,9 +231,13 @@ public final class SecureLink {
     /// joining a queue behind it. Everything else is sent immediately: there are never enough
     /// clicks or keystrokes to congest anything, and dropping one would be unforgivable.
     private func enqueue(_ message: Message) {
-        if case .mouseMove = message, inFlightSends >= Self.maxInFlightSends {
-            if deferredMove != nil { coalescedMoves += 1 }
-            deferredMove = message
+        if message.isPointerMove, inFlightSends >= Self.maxInFlightSends {
+            if let older = deferredMove {
+                coalescedMoves += 1
+                deferredMove = message.absorbing(older)
+            } else {
+                deferredMove = message
+            }
             return
         }
         transmit(message)

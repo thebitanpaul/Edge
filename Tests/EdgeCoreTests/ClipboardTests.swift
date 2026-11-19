@@ -540,11 +540,9 @@ struct SendCoalescingTests {
     /// not recoverable from the next one, the way a dropped position is.
     @Test("only pointer moves are safe to drop")
     func onlyMovesAreDroppable() {
-        func isDroppable(_ message: Message) -> Bool {
-            if case .mouseMove = message { return true }
-            return false
-        }
+        func isDroppable(_ message: Message) -> Bool { message.isPointerMove }
         #expect(isDroppable(.mouseMove(x: 0, y: 0, dx: 0, dy: 0)))
+        #expect(isDroppable(.timedMouseMove(x: 0, y: 0, dx: 0, dy: 0, sentAt: 0)))
         for message: Message in [
             .mouseButton(button: .left, down: true, clickCount: 1, x: 0, y: 0),
             .keyEvent(keyCode: 8, down: true, isRepeat: false, flags: 0),
@@ -553,9 +551,37 @@ struct SendCoalescingTests {
             .leaveScreen,
             .enterScreen(x: 0, y: 0, flags: 0),
             .clipboard(kind: "x", payload: Data()),
+            .ping(seq: 0, sentAt: 0),
         ] {
             #expect(!isDroppable(message), "\(message.type) must never be dropped")
         }
+    }
+
+    /// The newer position replaces the older, but the movement in between must not vanish:
+    /// applications that read deltas rather than positions would see the pointer move less
+    /// than the hand did.
+    @Test("a replaced move hands its movement on to the one replacing it")
+    func absorbingKeepsMovement() {
+        let older = Message.timedMouseMove(x: 100, y: 100, dx: 1, dy: -1, sentAt: 1)
+        let newer = Message.timedMouseMove(x: 104, y: 98, dx: 3, dy: -1, sentAt: 2)
+        guard case let .timedMouseMove(x, y, dx, dy, sentAt) = newer.absorbing(older) else {
+            Issue.record("wrong case"); return
+        }
+        #expect(x == 104 && y == 98)
+        #expect(dx == 4 && dy == -2)
+        #expect(sentAt == 2, "the newer move's stamp, since that is when this position was")
+
+        guard case let .mouseMove(_, _, ldx, ldy) =
+                Message.mouseMove(x: 9, y: 9, dx: .max, dy: -2)
+                    .absorbing(.mouseMove(x: 1, y: 1, dx: 5, dy: -3)) else {
+            Issue.record("wrong case"); return
+        }
+        #expect(ldx == .max, "sums clamp rather than wrap")
+        #expect(ldy == -5)
+
+        // Different kinds — a link that changed builds mid-stream — the newer simply wins.
+        let mixed = newer.absorbing(.mouseMove(x: 0, y: 0, dx: 7, dy: 7))
+        #expect(Codec.encodeFrame(mixed) == Codec.encodeFrame(newer))
     }
 }
 

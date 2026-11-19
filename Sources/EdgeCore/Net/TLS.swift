@@ -101,7 +101,13 @@ public enum TLSConfig {
         tcp.connectionTimeout = 5
 
         let params = NWParameters(tls: tls, tcp: tcp)
-        params.serviceClass = .responsiveData
+        // On Wi-Fi the service class picks the WMM access category the frames queue in.
+        // `.responsiveData` sounds right and is not: it shares the best-effort queue with
+        // every download on the network. Interactive video gets its own, higher-priority one,
+        // which is what a stream of small, latency-critical pointer packets needs. (Files
+        // share the connection and so the class; transfers are rare and short.) It is only a
+        // marking, so a network that ignores it simply treats the traffic as before.
+        params.serviceClass = .interactiveVideo
         // Keep traffic on real interfaces only; never let this ride a VPN or cellular tether.
         params.prohibitedInterfaceTypes = [.cellular]
         if let required = link.interfaceType {

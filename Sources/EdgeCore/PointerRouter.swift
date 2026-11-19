@@ -59,6 +59,9 @@ public struct PointerRouter: Sendable {
         didSet { if !allowCrossing { pressure = 0 } }
     }
 
+    /// How near the shared edge counts as heading for it; see `isApproachingEdge`.
+    public var approachDistance: Double = 160
+
     public init(layout: ScreenLayout? = nil) {
         self.layout = layout
     }
@@ -115,6 +118,17 @@ public struct PointerRouter: Sendable {
             virtualPointer = layout.virtual(fromRemote: remote)
             return .forward(remote: remote)
         }
+    }
+
+    /// Whether the pointer, still here, is close to the shared edge and moving towards it.
+    ///
+    /// Used to wake the other Mac's Wi-Fi radio ahead of the crossing, so the first
+    /// movements over there are not the ones that wait for it. Only a hint: nothing about
+    /// where events go depends on it.
+    public func isApproachingEdge(localLocation: ScreenPoint, delta: ScreenPoint) -> Bool {
+        guard mode == .local, allowCrossing, let layout else { return false }
+        return layout.outwardComponent(of: delta) > 0
+            && layout.isAtTransferEdge(localLocation, tolerance: approachDistance)
     }
 
     /// Where the pointer currently is on the other Mac, for events that carry a position but

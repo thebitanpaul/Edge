@@ -32,9 +32,11 @@ public struct Capabilities: OptionSet, Sendable {
     public static let roleSwitch = Capabilities(rawValue: 1 << 6)
     /// Forgetting a pairing on both Macs at once.
     public static let forgetPairing = Capabilities(rawValue: 1 << 7)
+    /// Understands `timedMouseMove`: pointer moves stamped with the sender's clock.
+    public static let timedPointer = Capabilities(rawValue: 1 << 8)
 
     public static let baseline: Capabilities = [.pointer, .keyboard, .scroll, .mediaKeys,
-                                                 .roleSwitch, .forgetPairing]
+                                                 .roleSwitch, .forgetPairing, .timedPointer]
 }
 
 public enum MessageType: UInt8, Sendable {
@@ -53,6 +55,7 @@ public enum MessageType: UInt8, Sendable {
     case mouseMove    = 0x12
     case mouseButton  = 0x13
     case scroll       = 0x14
+    case timedMouseMove = 0x15
     // keyboard
     case keyEvent     = 0x20
     case flagsChanged = 0x21
@@ -125,6 +128,14 @@ public enum Message: Sendable {
     case enterScreen(x: Int32, y: Int32, flags: UInt64)
     case leaveScreen
     case mouseMove(x: Int32, y: Int32, dx: Int32, dy: Int32)
+    /// `mouseMove` stamped with the sender's monotonic clock, in nanoseconds, for a peer with
+    /// `.timedPointer`.
+    ///
+    /// The two Macs' clocks are unrelated, so the stamp says nothing on its own. But how much
+    /// "arrived minus sent" *varies* across a stream is exactly how unevenly the link delivers
+    /// — the stutter you feel — measured during real use rather than by an idle heartbeat.
+    /// See `ArrivalJitter`.
+    case timedMouseMove(x: Int32, y: Int32, dx: Int32, dy: Int32, sentAt: UInt64)
     case mouseButton(button: MouseButtonID, down: Bool, clickCount: UInt8, x: Int32, y: Int32)
     case scroll(dx: Int32, dy: Int32, isPixel: Bool)
 
@@ -183,6 +194,7 @@ public enum Message: Sendable {
         case .enterScreen:  return .enterScreen
         case .leaveScreen:  return .leaveScreen
         case .mouseMove:    return .mouseMove
+        case .timedMouseMove: return .timedMouseMove
         case .mouseButton:  return .mouseButton
         case .scroll:       return .scroll
         case .keyEvent:     return .keyEvent
@@ -251,6 +263,9 @@ public enum Codec {
 
         case let .mouseMove(x, y, dx, dy):
             w.i32(x); w.i32(y); w.i32(dx); w.i32(dy)
+
+        case let .timedMouseMove(x, y, dx, dy, sentAt):
+            w.i32(x); w.i32(y); w.i32(dx); w.i32(dy); w.u64(sentAt)
 
         case let .mouseButton(button, down, clicks, x, y):
             w.u8(button.rawValue); w.bool(down); w.u8(clicks); w.i32(x); w.i32(y)
@@ -354,6 +369,10 @@ public enum Codec {
             case .mouseMove:
                 return .mouseMove(x: try r.i32(), y: try r.i32(), dx: try r.i32(), dy: try r.i32())
 
+            case .timedMouseMove:
+                return .timedMouseMove(x: try r.i32(), y: try r.i32(), dx: try r.i32(),
+                                       dy: try r.i32(), sentAt: try r.u64())
+
             case .mouseButton:
                 guard let b = MouseButtonID(rawValue: try r.u8()) else {
                     throw BinaryReader.Failure.invalidValue("mouse button")
@@ -429,5 +448,37 @@ public enum Codec {
         frame.append(message.type.rawValue)
         frame.append(payload)
         return frame
+    }
+}
+
+// MARK: - Pointer moves
+
+public extension Message {
+    /// Whether this is a pointer move: the one kind of message a newer one makes obsolete.
+    ///
+    /// Everything else must arrive whole — a dropped click or keystroke cannot be recovered
+    /// from the next one, the way a dropped position can.
+    var isPointerMove: Bool {
+        switch self {
+        case .mouseMove, .timedMouseMove: return true
+        default: return false
+        }
+    }
+
+    /// This move, also carrying the movement of `older`, which it replaces.
+    ///
+    /// The position is this one's: it is absolute, and newer is right. The deltas are added,
+    /// because applications that read deltas rather than positions — games, 3D and drawing
+    /// tools — would otherwise lose whatever movement the dropped message carried.
+    func absorbing(_ older: Message) -> Message {
+        func sum(_ a: Int32, _ b: Int32) -> Int32 { Int32(clamping: Int64(a) + Int64(b)) }
+        switch (self, older) {
+        case let (.timedMouseMove(x, y, dx, dy, sentAt), .timedMouseMove(_, _, odx, ody, _)):
+            return .timedMouseMove(x: x, y: y, dx: sum(dx, odx), dy: sum(dy, ody), sentAt: sentAt)
+        case let (.mouseMove(x, y, dx, dy), .mouseMove(_, _, odx, ody)):
+            return .mouseMove(x: x, y: y, dx: sum(dx, odx), dy: sum(dy, ody))
+        default:
+            return self
+        }
     }
 }
