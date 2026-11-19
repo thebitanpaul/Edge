@@ -240,8 +240,7 @@ cat <<EOF
     every earlier release — or all users have to grant Accessibility and Input Monitoring again.
     It has to be in ${B}Keychain Access ▸ login ▸ My Certificates${R} on this Mac.
 
-    Not there? Its backup, ${B}edge-signing.p12${R}, is in the ${B}Edge${R} folder on your Google Drive.
-    Download it and import it into the ${B}login${R} keychain: double-click it, or drop it on this
+    Not there? Import its backup, ${B}edge-signing.p12${R}, into the ${B}login${R} keychain: double-click it, or drop it on this
     window when asked below.
 
 EOF
@@ -299,7 +298,7 @@ while [ -z "$SHA1" ]; do
       [ -n "$SHA1" ] || explain_missing_identity
       ;;
     *)
-      echo "    Drop edge-signing.p12 (from Google Drive ▸ Edge) on this window and press Enter to"
+      echo "    Drop edge-signing.p12 on this window and press Enter to"
       echo "    import it — or import it in Keychain Access yourself and just press Enter."
       FILE="$(ask "    .p12 file, Enter when imported, or q to stop: ")"
       case "$FILE" in

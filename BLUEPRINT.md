@@ -109,13 +109,11 @@ Two details that matter in practice:
 Both sides watch for display reconfiguration and re-send their layout, so switching the monitor
 updates the arrangement without reconnecting.
 
-### A finding worth recording
+### Why TLS 1.2 and not 1.3
 
-The original plan said "TLS 1.3 with a pre-shared key". That turns out not to be available:
+TLS 1.3 with an external pre-shared key is not available:
 Network.framework only wires external PSKs into **TLS 1.2**, and pinning 1.3 makes the
-handshake fail with `errSSLHandshakeFail (-9858)`. This was established by testing the
-configurations rather than reading documentation, and the useful part of the result was the
-discovery that `TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256` (0xCCAC) *is* supported — which
+handshake fail with `errSSLHandshakeFail (-9858)`. However, `TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256` (0xCCAC) *is* supported — which
 is better than the plain PSK suite Apple's own sample code uses, because ECDHE gives forward
 secrecy. That is what the link pins, and it verifies the negotiated suite at runtime so a
 silent downgrade cannot happen unnoticed.
@@ -134,39 +132,33 @@ attributes those grants to *Edge* rather than to Terminal.
 
 ---
 
-## 4. Milestones
+## 4. Features
 
-Each milestone ends in something you can run and verify by yourself.
+* **Secure link** — device identity, X25519 pairing over the network with a six-digit numeric
+  comparison on both screens, `0600` secret storage, ECDHE-PSK transport, mutual HMAC
+  challenge/response, device pinning, Bonjour discovery, RTT measurement.
+* **Injection** — `CGEventPost` on the secondary: absolute pointer moves, drag, buttons with click
+  counts, scroll, keys by virtual key code, modifiers, and release-everything if the link drops.
+* **Capture & edge switching** — an active `CGEventTap` at `.cghidEventTap` on the primary; the
+  hardware is detached from the local cursor, which is parked and hidden; crossing requires edge
+  pressure and is blocked while a mouse button is held.
+* **Living with it** — auto-reconnect with backoff, a LaunchAgent for login, `status`, a stable
+  code-signing identity so permissions survive updates.
+* **Menu bar app** — supervises the session as a child process (`connect` / `listen`) and watches
+  its state file, so there is exactly one session implementation. One *Set up…* flow chooses the
+  role (primary drives, secondary lends its screen) and pairs. The arrangement is drawn to scale
+  and editable on the primary only.
+* **Clipboard sharing** — off by default, negotiated (both Macs must opt in), several
+  representations richest first, images a separate opt-in, file URLs never carried.
+* **Cable links** — each Mac advertises its addresses in its Bonjour record; when a cable is
+  preferred the `169.254` Thunderbolt/USB-C address is dialled (≈1 ms vs. tens of ms over Wi-Fi).
+  `auto` prefers a cable when one is advertised. Pairing always happens over Wi-Fi.
 
-### ✅ M1 — Secure link  *(delivered)*
-Device identity, pairing codes, secret storage, ECDHE-PSK transport, mutual HMAC
-challenge/response, device pinning, framed codec, Bonjour discovery, RTT measurement,
-`doctor` + `selftest`. 41 unit tests; 13 end-to-end checks including both rejection paths.
-**Verify:** `edge selftest` passes on one Mac; then pair the two Macs and
-`edge connect` reports a live link with a round-trip time.
+## 5. Getting your Mac back
 
-### ✅ M2 — Injection and screen geometry  *(delivered)*
-`CGEventPost` synthesis on the receiving Mac: absolute pointer moves, drag, buttons with click
-counts, scroll, keys by virtual key code, modifier changes, and a release-everything safety net
-for a link that drops mid-drag. Display enumeration on both sides, live `screenInfo` exchange,
-reconfiguration watching, and the combined-desktop maths with an ASCII plan of the arrangement.
-**Verify:** `edge inject-test` moves this Mac's own pointer; `edge remote-test`
-drives the *other* Mac's pointer across the link; `edge layout` draws the arrangement.
-
-### ✅ M3 — Capture & edge switching  *(delivered)*
-`CGEventTap` in active mode on the sending Mac: pointer, buttons, drag, scroll, keys and
-modifiers are consumed and forwarded while the pointer is away. The hardware is detached from
-the local pointer so movement arrives as deltas, the local cursor is parked and hidden, and the
-switch at the shared edge is driven by the M2 layout.
-**Verify:** `edge capture-test` proves this Mac can capture; then `edge connect`
-and push the pointer off the edge towards the other Mac.
-
-#### Not being able to get your Mac back is the real failure mode
-
-While the pointer is away, every event is swallowed. If that outlived the link, the Mac would
-be left with no keyboard and no pointer. So there are four independent routes back, and the
-decision logic lives in `PointerRouter` — a plain value type with no sockets, no CoreGraphics
-and no clock, so it can be tested exhaustively rather than by getting locked out:
+While the pointer is away every event is swallowed, so there are four independent routes back,
+decided by `PointerRouter` — a plain value type with no sockets, CoreGraphics or clock, so it is
+tested exhaustively:
 
 | Route back | Trigger |
 | --- | --- |
@@ -175,488 +167,43 @@ and no clock, so it can be tested exhaustively rather than by getting locked out
 | the escape chord | ⌘ ⌥ ⌃ ⇧ held together, checked before anything else |
 | the tap is disabled | macOS turns off a tap whose handler was too slow |
 
-Two invariants hold above all: nothing is ever swallowed unless the link is up *and* the other
-Mac's screen arrangement is known, and every route back goes through one function, so none of
-them can forget to re-attach the hardware or un-hide the cursor.
+Nothing is swallowed unless the link is up *and* the other Mac's arrangement is known, and every
+route back goes through one function. Input sharing is refused when both ends are the same Mac.
+
+## 6. Platform notes
+
+* **Hiding the cursor from a background process.** `CGDisplayHideCursor` silently does nothing
+  unless the window-server connection property `SetsCursorInBackground` is set, and hiding
+  re-couples the cursor to the mouse — so the order is hide, *then* detach. Both live in
+  `LocalPointer.beginCapture`; visibility is confirmed afterwards via `CGCursorIsVisible`.
+* **The hide count is global.** The display argument is ignored, so every successful hide is
+  recorded and undone exactly. Both sides re-assert the hide at 50 Hz while the pointer is away,
+  because anything sharing the window server (an `NSStatusItem` redraw, an app changing its
+  cursor) can undo it.
+* **App Nap.** Sessions started from the menu bar are background processes; both sides use
+  `ProcessInfo.beginActivity(.latencyCritical)`.
+* **Pointer moves are coalesced.** At most two frames are in flight; a waiting move is replaced,
+  never queued (deltas are summed). Clicks, keys, scrolls and control messages are never dropped.
+* **Wi-Fi latency.** `LinkWarmer` sends a tiny ping when the link has been idle for 25 ms while the
+  pointer is away, so neither radio dozes. Traffic is marked `.interactiveVideo` and the link
+  queues are `.userInteractive`. Timed pointer moves let the secondary log arrival jitter.
+* **Key reload.** Sessions restart when the set of pairing key identifiers changes (not the
+  file's timestamp, which a successful connection also touches).
+* **Windows from a menu-bar app.** Windows are opened one run-loop turn after the menu action and
+  owned by the app (no `NSAlert` for typing), or text fields never become key.
+
+## 7. Future work
 
-Input sharing is also refused when both ends turn out to be the same Mac — over loopback, or
-with a matching device id. The events one end injects would re-enter the tap that produced
-them, and each lap round that loop makes another event.
-
-### ✅ M4 — Living with it  *(delivered)*
-
-Auto-reconnect with exponential backoff, a user LaunchAgent so it starts at login, a `status`
-command backed by a small state file, a stable self-signed code identity so macOS stops asking
-for permissions after every rebuild, and an app icon.
-
-#### The two-pointers bug: three attempts
-
-A second cursor kept mirroring your hand on the sending Mac while the pointer was on the other
-one. It took three goes, and the first two were reasonable-sounding theories that happened to
-be wrong.
-
-**Attempt 1 — the tap level.** `.cgSessionEventTap` sees an event only after the window server
-has moved the cursor, so deleting it hides the movement from applications but not from your
-eyes. Moved to `.cghidEventTap`. Correct, necessary, and insufficient.
-
-**Attempt 2 — the ordering, and the entry inset.** Warping the cursor re-couples it to the
-hardware, so detaching and *then* parking undid the detach; parking first fixed that.
-Separately the pointer arrived two pixels inside the far screen, so the smallest movement back
-threw it home, leaving a stranded cursor on each machine. That became edge pressure: you must
-lean on an edge to go through it. Both were real bugs. Neither was *this* bug.
-
-**Attempt 3 — stop trusting the APIs.** `CGAssociateMouseAndMouseCursorPosition(0)` returns
-success, `CGDisplayHideCursor` returns success, and the cursor moved anyway, so the position
-was corrected after every movement instead. This made it worse, for a reason that took a
-fourth attempt to see.
-
-**Attempt 4 — measure, badly.** `cursor-doctor` reported 447 movements deleted and the cursor
-held at one position with no drift, and the conclusion drawn was that deleting the event is
-sufficient on its own. It was not a sound conclusion: that run also had an 8 ms re-parking
-timer going, and sampled the cursor every 10 ms. A sampler slower than the thing it measures
-can only report success. The timer was doing the work and the sampler could not see it.
-
-**Attempt 5 — read someone else's working implementation.** Deskflow has solved this, so the
-question became what it does that this did not. Two things, neither of which was going to be
-arrived at by reasoning about the documented API.
-
-First: **`CGDisplayHideCursor` does nothing for a background process.** It is documented to
-apply "while the application is active", and a command-line tool never is. It returns
-`kCGErrorSuccess` regardless. The window server has a private connection property,
-`SetsCursorInBackground`, that lifts the restriction; set it and the call starts working.
-So for four attempts this Mac's cursor was never hidden at all, and the argument about whether
-it was *moving* was beside the point — there was always a second pointer on screen.
-
-Second: **hiding the cursor re-couples it to the mouse.** Deskflow's `leave()` carries a
-comment saying the uncoupling must come after the hide for exactly this reason. This code did
-it the other way round, so the uncoupling was undone immediately afterwards and the cursor
-followed the hand.
-
-Both are now in one function, `LocalPointer.beginCapture`, because the ordering is the whole
-difficulty and three separate calls is three chances to get it wrong. And because
-`CGDisplayHideCursor` lies about what it did, the capture asks the window server afterwards —
-via `CGCursorIsVisible`, withdrawn from the SDK but still present — and reports
-`cursor confirmed hidden` or `CURSOR STILL VISIBLE`. `edge capture-test` prints it.
-
-The lesson, recorded because it was expensive: five attempts, four of them reasoned from
-documentation and measurements, against an API that reports success for work it did not do.
-The thing that settled it was half an hour reading an implementation that already worked.
-
-**Also fixed:** a drag towards the far edge used to hand the pointer over mid-drag, stranding
-whatever you were moving. Crossing is now blocked while any mouse button is held.
-
-### ✅ M5 — Comfort  *(delivered)*
-
-A menu-bar front end and clipboard sharing, so none of this has to live in a terminal.
-
-**The menu bar supervises rather than reimplements.** The session runs as a child process — the
-same binary with `connect` or `listen` — and the menu watches the state file the session
-already publishes. Two reasons that is worth an extra process: a session that dies takes the
-pointer with it but not the interface, so there is always something left to click *Start* on;
-and there is exactly one implementation of a session, so what you debug from the terminal is
-what the menu runs. Double-clicking the app, or `open -a Edge`, starts it; typing
-`edge` in a shell still prints the usage, because there a person is waiting to read it.
-
-**Clipboard sharing is off by default, and that is the point.** Whatever you last copied is
-frequently a password, and this sends it to the other machine every time it changes. It is
-also negotiated: nothing is sent unless *both* Macs advertised the capability, so switching it
-off on either one is enough — you do not have to trust the other side to honour your setting.
-Several representations travel together, richest first, so styled text still pastes somewhere
-that only takes plain. File URLs are deliberately not carried: a path that means something on
-one Mac means nothing, or something else, on the other. Images are a separate opt-in because a
-screenshot is megabytes. Applying the other Mac's clipboard records the change count it
-produced, or the two would hand the same clipboard back and forth for ever.
-
-Frames grew from 64 KiB to 4 MiB to carry a clipboard; input events are unchanged at 21 bytes
-for a mouse move. The protocol version went to 3, so a mismatched pair is refused at the
-handshake with a clear message rather than failing later as an odd frame error.
-
-#### Why the menu bar felt worse than the terminal
-
-Reported after the first version: via the menu bar the pointer lagged on the other Mac, and
-this Mac was left with a visible — though no longer moving — cursor. Both from the same binary
-that behaved perfectly when run from a shell. Three causes, none of them in the session logic:
-
-* **App Nap.** Run from a terminal, the session inherits the foreground application's
-  treatment. Run as a child of a menu-bar accessory it is just another background process, so
-  the system throttles it and coalesces its timers. `ProcessInfo.beginActivity` with
-  `.latencyCritical` opts out; that is the lag.
-* **A diagnostic left running at full tilt.** The drift sampler added while chasing the
-  two-pointers bug ran at 1 kHz, and reading the pointer is a round trip to the window server.
-  A thousand a second competes with the event tap for the very thing it is measuring. Now 50 Hz.
-* **The menu redrawing itself.** The status item was being redrawn twice a second whether or
-  not it had changed, and touching an `NSStatusItem` button makes AppKit reconsider the cursor
-  — which un-hid the cursor the session was holding hidden. It now redraws only when it would
-  look different, and the session re-asserts the hide within a frame if anything else undoes it.
-
-The third is worth keeping in mind generally: the front end and the session are different
-processes, but they share a window server, and that is enough for one to undo the other.
-
-#### Setup was two unrelated settings and no guidance
-
-Reported: "pairing fails", and "it is very confusing which Mac shows the code and which enters
-it — does that decide which one shares its screen?" The answer is no, and that the question had
-no answer in the interface was the defect.
-
-There are two independent decisions — which Mac drives, and the shared secret — and the menu
-presented them as unrelated items with nothing explaining either. Worse, a wrong combination
-fails *silently*: if both Macs are set to lend their screen, neither one dials, so there is no
-connection attempt, no error and nothing in any log. It looks exactly like a broken pairing.
-
-Now a single **Set up…** flow asks the two questions in order, says that the other Mac must be
-set to the opposite, and says plainly that pairing is symmetric. While a session is waiting,
-the menu names the likeliest reason: *Make sure the other Mac is set to "Lend my screen"*.
-
-Also fixed from the same report: labels were generated by counting pairings, so forgetting the
-first of two produced a name that was already taken — and an ambiguous label cannot be
-resolved when choosing which pairing to dial with.
-
-#### The lag was only ever half fixed
-
-App Nap was opted out of on the *sending* side and nowhere else. A receiving session started
-from the menu bar — a child of a background accessory app — was still throttled and still had
-its timers coalesced, so it injected events late and answered heartbeats late. A real session
-reported a mean round trip of 56 ms on a LAN, against a 6 ms minimum. Both sides now opt out.
-
-Worth noting how it was found: the symptom was reported as "the menu bar is laggy and the
-terminal is not", which sounds like the front end. It was not the front end; it was which Mac
-had been started by one. A single `grep` for `beginActivity` showed it appearing once in a
-codebase that has two kinds of session.
-
-**Also from the same report:** failing to find the other Mac was treated as fatal, so the menu
-bar reported a crash for what is nearly always "the other end has not been started yet". It is
-now retried like any other transient failure. And the error it printed contained an invented
-example IP address, which reads like something the program knows and is not — that is gone.
-
-#### "Pairing fails" — twice, and neither time was it the pairing
-
-Reported as a pairing problem, and reported accurately: it worked, the pairing was removed and
-remade, and from then on nothing connected. Two separate bugs, both of mine, and the pairing
-was correct throughout — both Macs showed key `f6b1c664` the whole time.
-
-**Discovery could never find an unpaired Mac.** The only Bonjour lookup matched on the peer's
-device id, which is learned *from* the first handshake. So a pairing that had never connected
-had nothing to match on, and the lookup was skipped entirely. You needed the id to connect and
-the connection to learn the id. `troubleshoot` found the other Mac by browsing while `connect`,
-seconds later, reported it could not — the same network, two different lookups, one of them
-asking an impossible question. An unbound pairing now dials whatever is advertising, which is
-safe for the reason discovery is not a trust boundary anywhere else here: a Mac that does not
-hold the key cannot finish the TLS handshake.
-
-**A listener never reloads its keys.** The set of keys a session will accept is fixed when its
-TLS parameters are built. Pair a new Mac while a session is running and it keeps offering the
-old key set and refuses the new one with `errSSLUnknownPSKIdentity`. From the outside this is
-indistinguishable from a mistyped code — and re-typing cannot fix it, because the stale side is
-the one not being re-paired. Sessions now watch the pairings file and restart when it changes,
-the menu bar restarts after any pairing edit, and that specific TLS status is reported as what
-it is rather than as a guess about the code.
-
-Both were found by probing the two Macs directly rather than reading the code: `nc` showed the
-port open, which ruled out the firewall; the TLS status was −9864, which named the cause exactly.
-
-#### Pairing by typing a code has a failure that care cannot prevent
-
-Three rounds of "pairing fails" ended with the two Macs simply holding different keys —
-`ce8f18c9` here against `f6b1c664` there. Typing a code is two separate manual actions with no
-feedback until a connection succeeds much later, and re-pairing *one* Mac silently recreates
-the divergence. Since a mismatch looks exactly like a typo, the natural response is to re-pair
-again, which is the same move that caused it. That is a trap built into the design, not a
-mistake made by the person in it.
-
-So: **Pair with a nearby Mac**. Both Macs run the same action, exchange X25519 public keys,
-and derive the same secret. Either both save the same key or neither saves anything — a
-mismatch is not reachable. An eavesdropper learns nothing, and an attacker in the middle would
-have to make the same six digits appear on both screens by chance, which is the usual numeric
-comparison from Bluetooth pairing.
-
-Typed codes remain for Macs that cannot see each other, now 18 characters rather than 28.
-
-**Found while building it:** `Runtime.wait` slept the main thread. Anything delivered through
-`DispatchQueue.main.async` — which is how a network callback gets back to the main thread —
-never ran, so a caller waiting on such a result waited for ever and then reported a timeout
-with the answer sitting undelivered in the queue. It services the run loop now. A latent bug
-on several paths, exposed because this one could not work around it.
-
-**Also:** Stop now stops a session by process id from the state file rather than only the child
-it holds a handle to — after a relaunch or a takeover that handle is nil while the session is
-very much still running, and Stop silently did nothing.
-
-#### A fix that broke the thing it was meant to protect
-
-The listener reloading its keys — added so a session running when you paired would accept the
-new key — watched the pairings file's modification date. But a *successful connection writes to
-that file*: it records which Mac the pairing bound to and when it was last seen. So every link
-that came up looked like a re-pairing, and the listener tore itself down a moment later. The
-symptom was 32 of 33 heartbeats lost with pointer events still flowing, and an icon on the
-receiving Mac that blinked for ever.
-
-It now compares the set of key identifiers rather than the file's timestamp. Nought spurious
-restarts, nought heartbeats lost.
-
-Worth naming the shape of the mistake: a watcher that asks "did this file change?" when the
-question is "did the keys change?". The file changes for reasons that have nothing to do with
-the thing being watched, and one of those reasons was the very event the watcher was supposed
-to survive.
-
-#### Choosing a cable means choosing an address, not an interface
-
-`preferredLink = cable` set `requiredInterfaceType = .wiredEthernet` and never connected. A
-Thunderbolt or USB-C link between two Macs carries a self-assigned `169.254` address and no
-route, so `NWPathMonitor` does not list its interface in any path at all — the requirement
-matches nothing and the connection waits for ever.
-
-The addresses work perfectly; only the interface is invisible. So each Mac advertises its own
-addresses in its Bonjour record, and the other picks the `169.254` one when a cable is wanted.
-Measured on the two Macs this was built for: **1.2 ms mean over the cable against 236 ms over
-Wi-Fi**, which is the difference between a pointer that feels attached to your hand and one
-that does not.
-
-Because of that gap, `auto` prefers a cable when one is advertised.
-
-#### Four from one round of real use
-
-**A pointer sometimes stranded on the screen just left.** Hiding was attempted on the main
-display only, and the cursor is parked wherever it left — which on a Mac with an external
-monitor is usually not the main display. The retry was also gated on the first attempt having
-succeeded, so a hide that failed once stayed failed. Now every display, and the retry runs
-regardless.
-
-**Two Macs could be set to incompatible links.** A listener restricted to Wi-Fi is simply
-unreachable from a Mac that chose the cable, with nothing to say why. The preference is now
-about dialling out only; listening accepts everything, so the combination cannot be made wrong.
-
-**A tooltip followed the cursor around** after the menu had been opened. Removed — the first
-line of the menu says the same thing, in a place that behaves.
-
-**Generating a pairing code created a device.** Both Macs showed "Mac 1" the moment a code was
-made, which reads as success when nothing has happened; typing a code then added a second, so
-one other machine appeared as two. Devices now lists only Macs that have actually connected,
-unused pairings replace one another instead of accumulating, and the typed-code flow goes one
-way: the Mac sharing its keyboard shows the code, the Mac lending its screen types it. Only one
-of them is offered the option, so both cannot sit waiting for the other.
-
-#### Typed codes removed, not improved
-
-Reported once more: a code pairing that said it had succeeded, after which Devices showed
-nothing. Rather than fix it again, it is gone. The method has a fault that care does not
-address — two manual actions with no feedback until a connection succeeds, so one Mac re-paired
-and the other not leaves two keys and a failure that looks exactly like a typo. The obvious
-response, re-pairing, recreates it.
-
-Pairing over the network has neither property, works over a cable as well as Wi-Fi, and needs
-one identical action on each Mac. Where discovery is blocked, an address can be given instead —
-a smaller thing to ask for than a secret, and one that fails immediately when wrong rather than
-looking like a pairing that will not connect.
-
-**On whether a cable needs pairing at all:** it does, and the reason is not caution. The
-pairing key *is* the key the link is encrypted with, so without one there is nothing to encrypt
-keystrokes with; and a cable plugged into a Mac you do not control should not hand it your
-keyboard. Since the same single action pairs over a cable, it costs nothing to keep.
-
-**Also fixed:** the Mac lending its screen never hid its own cursor, so returning the pointer
-left one sitting there — the same two-pointers complaint, from the other side of the link. It
-now hides while the pointer is away. Not uncoupled from the hardware, unlike the sending side:
-that Mac still has its own trackpad, and taking it away would be worse than a stray cursor.
-Instead the cursor is watched, and since nothing is being injected while the pointer is
-elsewhere, any movement means somebody is using that Mac directly and it comes straight back.
-
-#### A queue of stale positions in front of everything else
-
-Reported as a cursor that lingered a second or two on the screen just left, and as a far
-pointer that felt behind the hand. One cause for both.
-
-Every pointer move went straight to the socket, unbounded. On a slow link they pile up — and
-they pile up *in front of whatever comes next*, so the message saying the pointer has left
-waits behind positions it has already passed through. At a quarter-second round trip that is
-precisely a second or two of stale cursor. The far pointer was replaying a backlog rather than
-following anything.
-
-Pointer moves carry an absolute position, so every one but the newest is already wrong. At most
-two frames are now in flight, and a move that cannot go out immediately *replaces* the one
-waiting instead of queueing behind it. Clicks, keys, scrolls and control messages are never
-dropped — a lost click is not recoverable from the next one, the way a lost position is. The
-count of dropped positions is reported when a session ends, so a congested link is visible
-rather than merely felt.
-
-#### Pairing had the same interface bug the link had
-
-Pairing refused the interface preference's meaning in both directions: a Mac set to Wi-Fi would
-not pair over a cable, and a Mac set to cable required an interface that appears in no path.
-Pairing now ignores the preference entirely — it happens once and should use whatever reaches
-the other Mac — and the waiting window lists this Mac's own addresses, naming which one is the
-cable, so the other Mac can be told where to dial when discovery is blocked. That question —
-*which address, and where do I see it?* — had no answer anywhere in the interface.
-
-The link preference itself needed no warning in the end: a listening Mac accepts whichever link
-you arrive on, so the two Macs need not agree. The menu says so, which is better than a warning
-about a problem that does not exist.
-
-#### The lingering cursor, finally: a count kept per display
-
-`CGDisplayHideCursor` keeps its reference count **per display**. The code hid on every display
-— correct, since the cursor parks wherever it left — and then showed twice on the *main* one.
-On a two-display Mac each crossing therefore left the main display one show to the good and the
-second display still hidden. A surplus show cancels the *next* crossing's hide, which is why
-the cursor appeared on some crossings and not others, and why it got worse the more you crossed.
-
-Hides are now counted in rounds and shown on the same displays the same number of times, so
-every display returns to zero. `capture-test` performs five crossings rather than one, because
-a single round passed happily throughout: the fault only shows on the crossing *after* the
-unbalanced one.
-
-**Also in this round:** a text field in a menu-bar app ignores every keystroke, because an
-accessory app is never the active application and its windows never become key —
-`NSApp.activate` before each modal. The pairing window showed two addresses and let the reader
-choose, which is how "which one?" happens; it shows one, preferring the cable. The link
-preference is offered only on the primary Mac, since a listening Mac accepts whatever arrives
-and the setting does nothing there. Diagnostics moved under Help, and the prompts were cut to
-about a third of their length.
-
-#### A text field that ignored every keystroke
-
-`NSApp.activate` was not the fix, or not the whole one. The window was being opened from
-inside a menu action, while AppKit is still running the menu's own modal tracking session — a
-window opened there never becomes key, so nothing reaches a text field in it. Every action that
-opens a window now defers by one turn of the run loop, which lets the menu finish closing
-first.
-
-Worth noting what the symptom looks like from outside: not "the app is busy" but "this field
-is broken", which is why it was reported twice.
-
-#### Pairing over a cable needed no new mechanism
-
-The question was whether a cable needs its own pairing path. It does not: `mDNS` already
-advertises on the Thunderbolt interface — confirmed by registering a service and watching it
-appear on interface index 23, which is the bridge — so *Connect to a nearby Mac* works over a
-cable exactly as it does over Wi-Fi. What stopped it before was this code restricting pairing
-to the Wi-Fi interface, fixed in the previous round.
-
-The manual address stays as a fallback for networks that block discovery, and the two addresses
-are now labelled *network* and *cable* rather than offered as an unexplained pair.
-
-#### Only one side was recording the arrangement
-
-*Show arrangement* reported "not connected yet" on a Mac that had been connected for an hour.
-The dialling side stored the other Mac's screens; the listening side only logged them. So the
-secondary Mac could never draw an arrangement, however long it had been running.
-
-It is drawn now rather than printed: screens as rectangles to scale, in a window, with the edge
-and the alignment set from the same place — the Displays settings answer "is this right?" at a
-glance and an ASCII diagram in an alert does not. The controls are editable on the primary
-only, since the arrangement decides where *that* Mac's pointer goes and the secondary has no
-say in it.
-
-#### Pairing stopped working, and the cause was an ordering nobody chose
-
-Reported as "nearby pairing is not working at all — only the address dialog shows". The
-sequence was `session.start()` and then `alert.runModal()`. When the other Mac is *already*
-waiting it is found within milliseconds — before the modal begins — so `abortModal()` ran with
-no modal session and did nothing, and the window that opened immediately afterwards sat there
-for ever waiting for an event that had already happened. It failed precisely when both people
-did the right thing at the same time.
-
-Three chained alerts have been replaced by one window that updates in place. There is no
-ordering to get wrong: state arrives, the window redraws. It carries a **Search again** button,
-and the digits appear in it rather than in a separate dialog.
-
-The same change fixes the text field, for the third time of asking and this time at the cause:
-a field inside an alert opened from a menu never becomes first responder, because the window is
-created while AppKit is still tracking the menu and never becomes key. Owning the window means
-the responder can simply be set once it is on screen. `NSAlert` is no longer used for anything
-that takes typing.
-
-**And a feature removed rather than fixed.** Pairing over a cable is gone. `mDNS` does
-advertise on a Thunderbolt interface — that was measured, on interface index 23 — but the two
-Macs discovering *each other* across a direct bridge proved unreliable, in one direction only,
-which is the worst way for something to half-work. Pairing once over Wi-Fi always works and
-costs nothing; the cable then carries the link, where its speed is the point and where it is
-entirely dependable. The manual address survives only as a terminal flag, out of the menu,
-because in a user interface it is almost never the right answer.
-
-#### One Mac drives; the menu should say so
-
-A batch of reports that were really one problem: the secondary Mac offered the screen
-arrangement and the link preference, neither of which does anything there, and a "this Mac
-is…" switch that appeared to change roles but left the other Mac in its old one and kept an
-arrangement describing a relationship that no longer existed.
-
-The secondary now shows neither control. Roles change in exactly one place — *Set up again* —
-which stops the session first (changing roles under a running one is why switching came back
-wrong rather than not at all), resets the arrangement, discards the cached arrangement window
-so its editability follows the new role, and says plainly that the other Mac needs the opposite.
-
-**Also in this batch:**
-
-* Devices hid pairings that had not connected, which was right when a pairing was a generated
-  code and wrong now: pairing over the network learns the other Mac's name as part of the
-  exchange, so a successful pairing has a real Mac to name — and hiding it made success look
-  like failure.
-* A spinner that was stopped but still visible reads as a hang; it is hidden unless something
-  is actually being waited for.
-* The two buttons in the pairing window overlapped by 28 points.
-* A link preference that cannot be met — cable chosen with no cable attached, Wi-Fi chosen off
-  a network — now stops the session and says so, once, instead of retrying for ever against
-  something that is not there.
-* Help carries the version and the log. The commit belongs in `--version`, where someone is
-  asking; "why is it not connecting" is still a terminal command.
-
-#### A pointer that stutters over Wi-Fi, and one left standing on the secondary
-
-Reported: on the secondary the pointer felt laggy and jittery, and crossing in either direction
-sometimes left a stale pointer at the edge of the screen just left. The primary's own log had
-the clearest evidence: over Wi-Fi the heartbeat's round trip ran from **6 ms to 286 ms, mean
-55 ms**, clustering at either ~7 ms or 50–150 ms. Several causes, each fixed separately; none of
-it verified on the two Macs yet at the time of writing.
-
-* **Radios dozing.** A laptop's Wi-Fi radio sleeps as soon as traffic stops, and a packet for
-  a sleeping radio waits at the router for the next beacon, about 100 ms. Pointer traffic stops
-  whenever the hand does, so movement after every pause started late — a pointer that
-  hesitates, then jumps. `LinkWarmer` now sends a tiny ping whenever nothing else has gone
-  across for 25 ms while the pointer is away (for up to 30 s without input), and one as the
-  pointer approaches the edge, so the far radio is awake before the crossing. Pings are
-  answered, so both radios stay up; every build already answers them, so it needs nothing from
-  the other Mac. Sequence number 0 is reserved for them and the heartbeat skips it.
-* **Best-effort priority.** `.responsiveData` sounds right and shares Wi-Fi's best-effort queue
-  with every download on the network. The link now uses `.interactiveVideo`, which gets WMM's
-  video queue. Only a marking: a network that ignores it treats the traffic as before.
-* **Default-priority queues.** Every input event passes through the link's queue on both Macs —
-  on the secondary, the listener's queue, where each move is decoded and injected. Both are
-  `.userInteractive` now.
-* **Not rounding, as it turned out.** The first suspect was the integer delta field, on the
-  theory that a slowly moved trackpad reports fractions of a point and truncation dropped
-  them. Measured instead of assumed: 678 real movements on the MacBook Air, trackpad and mouse,
-  slow movement included, had not one fractional delta — the double field agreed exactly. So
-  nothing changed there. Coalesced moves do now add their deltas into the move that replaces
-  them, which apps that read deltas rather than positions were losing.
-* **The secondary hid its cursor once and never looked again.** The primary has re-hidden within
-  a frame since the menu-bar redraw problem above; the secondary did not, so anything there that
-  showed the cursor again — an application changing its cursor, a window coming forward — left
-  it standing at the edge for the whole trip. It now watches at 50 Hz like the primary.
-* **Hide/show counted by rounds, not by calls.** `CGDisplayHideCursor`'s display argument is
-  ignored ("The `display' parameter is ignored", says the header), so hiding "on every display"
-  raises one cursor-wide count once per display.
-  Showing on every display at the end balanced only if the number of displays had not changed
-  in between; a surplus show then cancelled the next crossing's hide. Each successful call is
-  recorded and undone exactly, and re-hiding is capped at 200 rounds a trip.
-
-To tell the network from Edge during real use — the heartbeat only samples an idle link every
-two seconds — a peer that advertises `.timedPointer` gets `timedMouseMove`: the same move,
-stamped with the sender's clock (29 bytes; an older peer gets `mouseMove`, so the protocol
-version is unchanged). The secondary measures how late each update lands behind the quickest
-one (`ArrivalJitter`; the clocks' offset cancels), logs it at debug level after every trip, and
-when 95% are not within 30 ms says so in its log once every ten minutes, pointing at a cable.
-
-### M6 — If it is wanted
 Dead keys and input methods, drag-and-drop of files, a preferences window, per-peer layouts.
 
 ---
 
-## 5. Layout
+## 8. Layout
 
 ```
 Package.swift
 Sources/EdgeCore/      the library (transport, crypto, protocol, config)
 Sources/edge/          the CLI front-end
 Tests/EdgeCoreTests/   unit tests
-Scripts/                     build + app-bundle + launchagent helpers
+Scripts/               build, app bundle, release and LaunchAgent helpers
 ```
