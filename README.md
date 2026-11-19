@@ -256,8 +256,10 @@ Scripts/test.sh                # unit tests
 Scripts/package-dmg.sh         # universal Edge.dmg in dist/
 ```
 
-`Scripts/create-signing-identity.sh` creates a local signing certificate so macOS keeps your
-permission grants across rebuilds. See [BLUEPRINT.md](BLUEPRINT.md) for how Edge is built.
+A build from source is signed ad-hoc, so macOS may ask for Accessibility and Input Monitoring
+again after a rebuild. Official releases are signed with a certificate only the maintainer holds
+and are published only at [github.com/thebitanpaul/Edge/releases](https://github.com/thebitanpaul/Edge/releases).
+See [BLUEPRINT.md](BLUEPRINT.md) for how Edge is built.
 
 <br/>
 

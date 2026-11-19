@@ -253,7 +253,7 @@ explain_missing_identity() {
     warn "My Certificates ▸ double-click \"$SIGNING_NAME\" ▸ Trust ▸ Code Signing: Always Trust."
   elif security find-certificate -c "$SIGNING_NAME" >/dev/null 2>&1; then
     warn "This Mac has a certificate called \"$SIGNING_NAME\", but it is NOT the release one"
-    warn "(different fingerprint — probably made by Scripts/create-signing-identity.sh)."
+    warn "(different fingerprint — a certificate made on this Mac, not the backed-up one)."
     warn "Only the certificate backed up as edge-signing.p12 can sign a release."
   else
     warn "There is no \"$SIGNING_NAME\" certificate in any keychain on this Mac."
@@ -461,8 +461,9 @@ fi
 
 step "Building, signing and packing the universal DMG — this takes a few minutes"
 BUILD_LOG="$DIST/build-$VERSION.log"
-# By SHA-1, so build.sh signs with exactly the certificate checked above.
-if ! EDGE_SIGNING_IDENTITY="$SHA1" Scripts/package-dmg.sh 2>&1 | tee "$BUILD_LOG" | sed 's/^/    /'; then
+# build.sh finds the same certificate by the same fingerprint, so it signs with exactly the
+# one checked above.
+if ! Scripts/package-dmg.sh 2>&1 | tee "$BUILD_LOG" | sed 's/^/    /'; then
   die "The build failed — nothing was pushed. Log: ${BUILD_LOG#$ROOT/}"
 fi
 

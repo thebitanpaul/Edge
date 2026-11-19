@@ -1,11 +1,11 @@
-# Shared by Scripts/release.sh and Scripts/publish-release.sh. Sourced, not run.
+# Shared by Scripts/build.sh, Scripts/release.sh and Scripts/publish-release.sh. Sourced, not run.
 #
 # Who can publish an Edge release is decided by two things these scripts check but cannot
 # hand out: the private key of the "Edge Local Signing" certificate (backed up as
 # edge-signing.p12), and a GitHub login with push access to thebitanpaul/Edge.
 #
-# Matching the certificate by name is not enough — Scripts/create-signing-identity.sh makes
-# a certificate with the same name on any Mac. So the release one is pinned by fingerprint.
+# Matching the certificate by name is not enough — anyone can make a self-signed certificate
+# called "Edge Local Signing" in Keychain Access. So the release one is pinned by fingerprint.
 # The fingerprint is of the public certificate, which is inside every released Edge.app
 # anyway; it is not a secret, and knowing it does not let anyone sign as it.
 
@@ -35,10 +35,12 @@ pinned_identity_sha1() {
 
 # Succeeds if the signature on $1 is valid and its leaf certificate is the pinned one.
 signed_by_pinned_cert() {
-  local dir got=""
-  codesign --verify --strict "$1" >/dev/null 2>&1 || return 1
+  local dir got="" target="$1"
+  # Absolute, because the certificates are extracted from inside a temporary directory.
+  case "$target" in /*) ;; *) target="$PWD/$target" ;; esac
+  codesign --verify --strict "$target" >/dev/null 2>&1 || return 1
   dir="$(mktemp -d -t edge-cert)"
-  (cd "$dir" && codesign -d --extract-certificates=cert "$1" >/dev/null 2>&1) || true
+  (cd "$dir" && codesign -d --extract-certificates=cert "$target" >/dev/null 2>&1) || true
   [ -f "$dir/cert0" ] && got="$(shasum -a 256 "$dir/cert0" | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')"
   rm -rf "$dir"
   [ "$got" = "$SIGNING_SHA256" ]

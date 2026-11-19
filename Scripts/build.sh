@@ -33,10 +33,11 @@ done
 BUNDLE_ID="app.edge.cli"
 APP="$ROOT/build/Edge.app"
 ICON="$ROOT/Resources/Edge.icns"
-# A self-signed identity created by Scripts/create-signing-identity.sh, if the user made one.
-# Scripts/release.sh passes the release certificate's SHA-1 instead, so a look-alike with the
-# same name can never be the one picked.
-SIGNING_IDENTITY="${EDGE_SIGNING_IDENTITY:-Edge Local Signing}"
+# The release certificate, if this Mac holds it — matched by fingerprint, never by name, so a
+# certificate someone else names "Edge Local Signing" is never the one used. Without it the
+# build is signed ad-hoc. See Scripts/lib/release-common.sh.
+. "$ROOT/Scripts/lib/release-common.sh"
+SIGNING_IDENTITY="$(pinned_identity_sha1)"
 
 # Anything in build/ left over from a previous name. A stale Continuous.app is not inert:
 # it holds its own privacy grants, it is what a login item installed before the rename still
@@ -241,9 +242,9 @@ PLIST
 # Signing decides whether macOS keeps your privacy permissions across a rebuild.
 #
 # An ad-hoc signature identifies the app by the hash of its contents, so every rebuild looks
-# like a brand new app and Accessibility and Input Monitoring have to be granted again. A
-# self-signed certificate gives the bundle a stable identity instead, and the grants stick.
-# Scripts/create-signing-identity.sh makes one; this picks it up automatically if it exists.
+# like a brand new app and Accessibility and Input Monitoring have to be granted again. The
+# release certificate gives the bundle a stable identity instead, and the grants stick — but
+# only on a Mac that holds it.
 # Inside out: the extension first, then the app, whose signature seals the extension's in.
 sign_all() {
   local identity="$1"
@@ -254,8 +255,8 @@ sign_all() {
            --options runtime --timestamp=none "$APP"
 }
 
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
-  echo "==> Signing as \"$SIGNING_IDENTITY\" (stable identity — permissions survive rebuilds)"
+if [ -n "$SIGNING_IDENTITY" ]; then
+  echo "==> Signing as \"$SIGNING_NAME\" (the release certificate — permissions survive rebuilds)"
 
   # The first signature with a new key makes the keychain put up a dialog, and codesign then
   # waits for it indefinitely. A build that hangs with no explanation is worse than one that
@@ -275,15 +276,12 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
     echo "    codesign is waiting on a keychain dialog — falling back to ad-hoc."
     echo
     echo "    There is probably a prompt on screen asking whether codesign may use the"
-    echo "    key \"$SIGNING_IDENTITY\". Click \"Always Allow\" and build again, or grant it"
+    echo "    key \"$SIGNING_NAME\". Click \"Always Allow\" and build again, or grant it"
     echo "    once from the terminal with your login password:"
     echo
     echo "        security set-key-partition-list -S apple-tool:,apple:,codesign: \\"
     echo "            -s -k \"\$(read -s -p 'login password: ' p; echo \$p)\" \\"
     echo "            ~/Library/Keychains/login.keychain-db"
-    echo
-    echo "    Or drop the identity entirely:"
-    echo "        security delete-certificate -c \"$SIGNING_IDENTITY\""
     echo
     sign_all - 2>&1 | sed 's/^/    /'
   else
@@ -294,12 +292,8 @@ else
   echo "==> Signing (ad-hoc)"
   sign_all - 2>&1 | sed 's/^/    /'
   echo
-  echo "    ⚠ No stable signing identity on this Mac."
-  echo "      An ad-hoc signature identifies the app by the hash of its contents, so every"
-  echo "      rebuild looks like a brand new app and you will be asked for Accessibility and"
-  echo "      Input Monitoring again each time. Run this once to stop that:"
-  echo
-  echo "          Scripts/create-signing-identity.sh"
+  echo "    An ad-hoc signature identifies the app by the hash of its contents, so after a"
+  echo "    rebuild macOS may ask for Accessibility and Input Monitoring again."
   echo
 fi
 rm -rf "$ENTITLEMENTS_DIR"
