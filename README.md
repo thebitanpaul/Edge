@@ -4,7 +4,7 @@
   <img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114360/ProductIcon_EDGE.webp"
        width="55"
        alt="Edge Logo"
-       align="center"> Edge
+       align="center"> 
 </h1>
 
 <h3><em>One keyboard and mouse across two Macs — even when they can't share an Apple ID.</em></h3>
@@ -14,7 +14,7 @@
 </br>
 
 [![Download for macOS](https://img.shields.io/badge/Download_for-macOS-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/thebitanpaul/Edge/releases/latest/download/Edge.dmg)
-[![Open on phiUture](https://img.shields.io/badge/Open%20on-phiUture-000000?style=for-the-badge)](https://phiuture.com)
+[![Open on phiUture](https://img.shields.io/badge/Open%20on-phiUture-000000?style=for-the-badge)](https://phiuture.com/tech/EDGE)
 [![Watch on YouTube](https://img.shields.io/badge/Watch_on-YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/I8NuPLQOiVA)
 
 ![Version](https://img.shields.io/github/v/release/thebitanpaul/Edge?style=flat-square&label=version&color=0A84FF)
