@@ -27,7 +27,7 @@ let steps = [
     "Go to System Settings ▸ Privacy & Security.",
     "Under Security, click Open Anyway.",
 ]
-let footnote = "Edge is open source but not notarised by Apple, so macOS asks this once."
+let footnote = "Edge isn't notarised by Apple yet, so macOS asks this once."
 
 func draw(scale: CGFloat, to url: URL) throws {
     let rep = NSBitmapImageRep(

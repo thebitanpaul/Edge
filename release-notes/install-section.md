@@ -8,7 +8,7 @@
 4. Go to **System Settings ▸ Privacy & Security**.
 5. Under **Security**, click **Open Anyway**.
 
-macOS asks this only once: Edge is open source, but not notarised by Apple. Then grant Accessibility (both Macs) and Input Monitoring (the primary), and choose **Set up** on both.
+macOS asks this only once: Edge isn't notarised by Apple yet. Then grant Accessibility (both Macs) and Input Monitoring (the primary), and choose **Set up** on both.
 
 ### Checksum
 ```

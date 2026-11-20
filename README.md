@@ -22,7 +22,7 @@
 [![Open on phiUture](https://img.shields.io/badge/Open_on-phiUture-000000?style=for-the-badge)](https://phiuture.com/tech/EDGE)
 
 ![status Live](https://img.shields.io/badge/status-Live-2EA043?style=flat-square)
-[![license Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-0A84FF?style=flat-square)](LICENSE)
+[![license Proprietary](https://img.shields.io/badge/license-Proprietary-555555?style=flat-square)](LICENSE)
 ![launched 2026](https://img.shields.io/badge/launched-2026-7C3AED?style=flat-square)
 ![version](https://img.shields.io/github/v/release/thebitanpaul/Edge?style=flat-square&label=version&color=0A84FF)
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-0A84FF?style=flat-square&logo=apple&logoColor=white)
@@ -38,7 +38,7 @@
 
 ## Overview
 
-EDGE is a free, open-source macOS app that shares one keyboard and mouse between two Macs — including Macs that can't sign in to the same Apple ID, like a work machine beside a personal one. Push the pointer off the edge of one screen and it appears on the other, with your keystrokes, clipboard and dragged files following it. Everything stays on your desk: the two Macs talk only to each other over an end-to-end encrypted link, with no cloud, no account and no telemetry.
+EDGE is a free macOS app that shares one keyboard and mouse between two Macs — including Macs that can't sign in to the same Apple ID, like a work machine beside a personal one. Push the pointer off the edge of one screen and it appears on the other, with your keystrokes, clipboard and dragged files following it. Everything stays on your desk: the two Macs talk only to each other over an end-to-end encrypted link, with no cloud, no account and no telemetry.
 
 ---
 
@@ -183,7 +183,7 @@ linked.
    on both Macs.
 2. Open it and drag **Edge** onto **Applications**.
 3. Open Edge from Applications. The first time, macOS will say it can't verify the developer —
-   Edge is open source and not notarised by Apple. Go to **System Settings ▸ Privacy & Security**,
+   Edge isn't notarised by Apple yet. Go to **System Settings ▸ Privacy & Security**,
    scroll down and click **Open Anyway**.
 4. Grant the permissions Edge asks for:
 
@@ -276,7 +276,8 @@ Everything in the menu is also available from the terminal. The app ships the `e
 
 ## Build from source
 
-Needs only the Xcode Command Line Tools — no packages are downloaded.
+You may build EDGE on your own Macs to review and verify it — see [`LICENSE`](LICENSE).
+It needs only the Xcode Command Line Tools — no packages are downloaded.
 
 ```bash
 git clone https://github.com/thebitanpaul/Edge.git && cd Edge
@@ -310,9 +311,14 @@ See [BLUEPRINT.md](BLUEPRINT.md) for how Edge is built.
 
 ## License
 
-Licensed under the **Apache License 2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+**Proprietary — Copyright © 2026 Bitan Paul, phiUture Tech. All Rights Reserved.**
 
-Copyright © 2026 Bitan Paul, phiUture. All Rights Reserved.
+EDGE is proprietary software owned by phiUture Tech. Its source code is published here to be
+read, not reused: no part of it may be copied, modified, distributed or used to create derivative
+work without prior written permission. The official signed download from [GitHub Releases](https://github.com/thebitanpaul/Edge/releases) is free to use, and you may build EDGE from source on your own Macs to review and verify it.
+
+See [`LICENSE`](LICENSE) for the full terms, and write to
+[thephiuture@gmail.com](mailto:thephiuture@gmail.com) for permissions.
 
 ---
 
@@ -362,6 +368,6 @@ Technology Follows.* — makes original music and film.
 
 **phiUture Tech** · *Thoughtfully Engineered. Crafted for You.*
 
-<sub>© 2026 phiUture · Apache License 2.0</sub>
+<sub>© 2026 phiUture Tech · All Rights Reserved</sub>
 
 </div>
