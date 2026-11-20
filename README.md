@@ -1,7 +1,7 @@
 <div align="center">
 
 <h1>
-  <img src="docs/assets/edge-icon.png"
+  <img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114360/ProductIcon_EDGE.webp"
        width="55"
        alt="Edge Logo"
        align="center"> Edge
@@ -15,22 +15,30 @@
 
 [![Download for macOS](https://img.shields.io/badge/Download_for-macOS-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/thebitanpaul/Edge/releases/latest/download/Edge.dmg)
 [![Open on phiUture](https://img.shields.io/badge/Open%20on-phiUture-000000?style=for-the-badge)](https://phiuture.com)
+[![Watch on YouTube](https://img.shields.io/badge/Watch_on-YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/I8NuPLQOiVA)
 
 ![Version](https://img.shields.io/github/v/release/thebitanpaul/Edge?style=flat-square&label=version&color=0A84FF)
 ![macOS](https://img.shields.io/badge/macOS-13%2B-0A84FF?style=flat-square&logo=apple&logoColor=white)
 ![Universal](https://img.shields.io/badge/Apple_silicon_%2B_Intel-universal-0A84FF?style=flat-square)
 ![License](https://img.shields.io/badge/license-Apache_2.0-0A84FF?style=flat-square)
 
+<br/>
+
+<img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795115959/ProductHero_EDGE.webp" alt="Edge — one keyboard and mouse across two Macs" width="100%">
+
 </div>
 
-```
-     Mac A (your keyboard)                 Mac B (its screen)
-  ┌────────────────────────┐          ┌────────────────────────┐
-  │  pointer hits the edge │  ──────► │  pointer appears here  │
-  │  keystrokes forwarded  │   TLS    │  keystrokes injected   │
-  └────────────────────────┘          └────────────────────────┘
-          no cloud · no account · no third-party server
-```
+## Watch: Edge from A to Z
+
+<div align="center">
+
+<a href="https://youtu.be/I8NuPLQOiVA">
+  <img src="https://img.youtube.com/vi/I8NuPLQOiVA/maxresdefault.jpg" alt="Watch Edge from A to Z on YouTube" width="100%">
+</a>
+
+<sub>Features, install, setup, everyday use and security, in ten minutes. <a href="https://youtu.be/I8NuPLQOiVA">Watch on YouTube ▸</a></sub>
+
+</div>
 
 ## Why Edge?
 
@@ -41,6 +49,8 @@ their word for what happens next.
 
 **Edge is the same idea with the trust removed.** It runs only on your two Macs, talks only to
 the other Mac, and every line of code that holds those permissions is in this repository.
+
+<img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114391/01-one-keyboard-two-macs.webp" alt="Push the pointer off one Mac and it appears on the other" width="100%">
 
 <br/>
 
@@ -144,6 +154,13 @@ linked.
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="50%"><img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114397/05-clipboard-and-files.webp" alt="Copy on one Mac, paste on the other, and drag files across" width="100%"></td>
+<td width="50%"><img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114400/06-cable.webp" alt="A Thunderbolt or USB-C cable: 1.2 ms against 236 ms over Wi-Fi" width="100%"></td>
+</tr>
+</table>
+
 <br/>
 
 ## Install
@@ -175,24 +192,16 @@ linked.
 
 Now push the pointer off the edge of your screen towards the other Mac.
 
-```
-  Primary · connected to Work Mac
-  Cable · 1 ms · clipboard
-  ─────────────────────────────
-  Stop
-  ─────────────────────────────
-  Devices              ▸
-  Screen arrangement
-  Connect over         ▸  Whichever connects · Cable · Wi-Fi
-  ─────────────────────────────
-  ✓ Share clipboard
-  ✓ Carry dragged files
-  ✓ Start at login
-  ─────────────────────────────
-  Switch to Secondary
-  Help                 ▸
-  Quit Edge
-```
+<table>
+<tr>
+<td width="50%"><img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114394/03-pairing.webp" alt="Both Macs show the same six digits" width="100%"></td>
+<td width="50%"><img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114396/04-screen-arrangement.webp" alt="Place the other Mac where it really sits" width="100%"></td>
+</tr>
+</table>
+
+Everything else lives in the menu bar:
+
+<img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114400/02-menu-bar.webp" alt="The Edge menu in the menu bar, and its Control Center switch" width="100%">
 
 <br/>
 
@@ -209,6 +218,13 @@ Now push the pointer off the edge of your screen towards the other Mac.
 
 The full threat model, including what is deliberately *not* defended against, is in
 [docs/SECURITY.md](docs/SECURITY.md).
+
+<table>
+<tr>
+<td width="50%"><img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114402/07-security.webp" alt="Seven layers of security" width="100%"></td>
+<td width="50%"><img src="https://res.cloudinary.com/b0tb1mho/image/upload/v1795114405/08-open-source-selftest.webp" alt="edge selftest checks the crypto and transport on your Mac" width="100%"></td>
+</tr>
+</table>
 
 <br/>
 
